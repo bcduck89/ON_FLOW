@@ -12,3 +12,6 @@ dependencies = [
     "streamlit>=1.59.0",
     "supabase>=2.31.0",
 ]
+
+[tool.uv]
+package = false
