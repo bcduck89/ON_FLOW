@@ -16,6 +16,8 @@ from services.member_service import (
     add_member,
     edit_member,
     remove_member,
+    export_members_csv,
+    import_members_from_csv,
 )
 from ui.auth_widgets import render_top_auth
 
@@ -33,6 +35,7 @@ st.title("👥 회원관리")
 st.caption("ON_FLOW Member Management")
 
 ok, msg = check_supabase_connection()
+
 if not ok:
     st.error("Supabase 연결 실패")
     st.caption(msg)
@@ -44,15 +47,26 @@ st.divider()
 def safe_date(value):
     if value in ["", None]:
         return pd.Timestamp.today().date()
+
     try:
         return pd.to_datetime(value).date()
     except Exception:
         return pd.Timestamp.today().date()
 
 
+def optional_date(value):
+    if value in ["", None]:
+        return None
+
+    try:
+        return pd.to_datetime(value).date()
+    except Exception:
+        return None
+
+
 menu = st.radio(
     "회원관리 메뉴",
-    ["회원 목록", "회원 추가", "회원정보 수정 / 삭제"],
+    ["회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
     horizontal=True,
 )
 
@@ -75,6 +89,16 @@ if menu == "회원 목록":
                 hide_index=True,
             )
 
+            csv_data = export_members_csv()
+
+            st.download_button(
+                label="회원목록 CSV 다운로드",
+                data=csv_data,
+                file_name="onflow_members.csv",
+                mime="text/csv",
+                width="stretch",
+            )
+
     except Exception as e:
         st.error("회원 목록을 불러오는 중 오류가 발생했습니다.")
         st.exception(e)
@@ -92,7 +116,12 @@ elif menu == "회원 추가":
         with col1:
             name = st.text_input("이름 *")
             nickname = st.text_input("닉네임")
-            age = st.number_input("나이", min_value=0, max_value=120, value=0)
+
+            birth_date = st.date_input(
+                "생년월일",
+                value=None,
+                format="YYYY-MM-DD",
+            )
 
             gender = st.selectbox(
                 "성별",
@@ -109,7 +138,11 @@ elif menu == "회원 추가":
             city = st.text_input("시도", value=DEFAULT_CITY)
             district = st.text_input("시군구", value=DEFAULT_DISTRICT)
             deposit_name = st.text_input("입금자명")
-            joined_at = st.date_input("가입일")
+
+            joined_at = st.date_input(
+                "가입일",
+                format="YYYY-MM-DD",
+            )
 
         memo = st.text_area("비고")
 
@@ -117,10 +150,10 @@ elif menu == "회원 추가":
 
         if submitted:
             try:
-                add_member(
+                reprocess_result = add_member(
                     name=name,
                     nickname=nickname,
-                    age=age if age > 0 else None,
+                    birth_date=birth_date,
                     gender=gender,
                     member_type=member_type,
                     city=city,
@@ -132,8 +165,68 @@ elif menu == "회원 추가":
 
                 st.success(f"{name} 회원이 추가되었습니다.")
 
+                if not reprocess_result.empty:
+                    st.info("회원 추가 후 미매칭 거래가 자동으로 재처리되었습니다.")
+                    st.dataframe(
+                        reprocess_result,
+                        width="stretch",
+                        hide_index=True,
+                    )
+
             except Exception as e:
                 st.error("회원 추가 중 오류가 발생했습니다.")
+                st.exception(e)
+
+
+# =========================================================
+# 회원 일괄 업로드
+# =========================================================
+elif menu == "회원 일괄 업로드":
+    st.subheader("회원 CSV 일괄 업로드")
+
+    st.info(
+        "CSV 컬럼 형식: 이름, 닉네임, 생년월일, 성별, 회원구분, 시도, 시군구, 입금자명, 가입일, 비고"
+    )
+
+    template = pd.DataFrame(
+        [
+            {
+                "이름": "홍길동",
+                "닉네임": "길동",
+                "생년월일": "1996-01-01",
+                "성별": "남성",
+                "회원구분": "일반",
+                "시도": "부산광역시",
+                "시군구": "동래구",
+                "입금자명": "홍길동",
+                "가입일": "2026-07-01",
+                "비고": "",
+            }
+        ]
+    )
+
+    st.download_button(
+        label="업로드 양식 다운로드",
+        data=template.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+        file_name="onflow_member_upload_template.csv",
+        mime="text/csv",
+        width="stretch",
+    )
+
+    uploaded_file = st.file_uploader(
+        "회원 CSV 파일 업로드",
+        type=["csv"],
+    )
+
+    if uploaded_file is not None:
+        if st.button("회원 일괄 업로드 실행", type="primary", width="stretch"):
+            try:
+                result = import_members_from_csv(uploaded_file)
+                st.success("회원 일괄 업로드가 완료되었습니다.")
+                st.dataframe(result, width="stretch", hide_index=True)
+
+            except Exception as e:
+                st.error("회원 일괄 업로드 중 오류가 발생했습니다.")
                 st.exception(e)
 
 
@@ -180,17 +273,10 @@ elif menu == "회원정보 수정 / 삭제":
                 value=str(selected_row.get("nickname", "")),
             )
 
-            current_age = selected_row.get("age", 0)
-            try:
-                current_age = int(current_age)
-            except Exception:
-                current_age = 0
-
-            edit_age = st.number_input(
-                "나이",
-                min_value=0,
-                max_value=120,
-                value=current_age,
+            edit_birth_date = st.date_input(
+                "생년월일",
+                value=optional_date(selected_row.get("birth_date", "")),
+                format="YYYY-MM-DD",
             )
 
             current_gender = str(selected_row.get("gender", ""))
@@ -236,6 +322,7 @@ elif menu == "회원정보 수정 / 삭제":
             edit_joined_at = st.date_input(
                 "가입일",
                 value=safe_date(selected_row.get("joined_at", "")),
+                format="YYYY-MM-DD",
             )
 
             current_status = str(selected_row.get("status", "active"))
@@ -262,11 +349,11 @@ elif menu == "회원정보 수정 / 삭제":
 
         if submitted_edit:
             try:
-                edit_member(
+                reprocess_result = edit_member(
                     member_id=member_id,
                     name=edit_name,
                     nickname=edit_nickname,
-                    age=edit_age if edit_age > 0 else None,
+                    birth_date=edit_birth_date,
                     gender=edit_gender,
                     member_type=edit_member_type,
                     city=edit_city,
@@ -278,6 +365,14 @@ elif menu == "회원정보 수정 / 삭제":
                 )
 
                 st.success("회원정보가 수정되었습니다.")
+
+                if not reprocess_result.empty:
+                    st.info("회원정보 수정 후 미매칭 거래가 자동으로 재처리되었습니다.")
+                    st.dataframe(
+                        reprocess_result,
+                        width="stretch",
+                        hide_index=True,
+                    )
 
             except Exception as e:
                 st.error("회원정보 수정 중 오류가 발생했습니다.")

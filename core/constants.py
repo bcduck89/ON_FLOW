@@ -33,3 +33,13 @@ DEFAULT_DISTRICT = "동래구"
 MONTHLY_FEE = 2000
 QUARTERLY_FEE = 6000
 GRACE_DAYS = 7
+
+TRANSACTION_STATUS = {
+    "uploaded": "신규저장",
+    "duplicated": "중복거래",
+    "matched": "회원매칭",
+    "fee_applied": "회비반영완료",
+    "unmatched": "미매칭",
+    "need_review": "확인필요",
+    "skipped": "건너뜀",
+}

@@ -9,6 +9,7 @@ MEMBER_COLUMNS = [
     "member_type",
     "name",
     "nickname",
+    "birth_date",
     "age",
     "gender",
     "city",
@@ -46,10 +47,10 @@ def list_members() -> pd.DataFrame:
     return df[MEMBER_COLUMNS].fillna("")
 
 
-def insert_member(row: dict) -> None:
+def insert_member(row: dict) -> dict:
     sb = get_supabase_client()
-    sb.table("members").insert(row).execute()
-
+    response = sb.table("members").insert(row).execute()
+    return response.data[0] if response.data else {}
 
 def update_member(member_id: int, values: dict) -> None:
     sb = get_supabase_client()
@@ -59,3 +60,12 @@ def update_member(member_id: int, values: dict) -> None:
 def delete_member(member_id: int) -> None:
     sb = get_supabase_client()
     sb.table("members").delete().eq("member_id", member_id).execute()
+    
+
+def insert_members(rows: list[dict]) -> list[dict]:
+    if not rows:
+        return []
+
+    sb = get_supabase_client()
+    response = sb.table("members").insert(rows).execute()
+    return response.data or []
