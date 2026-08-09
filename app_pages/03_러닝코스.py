@@ -297,7 +297,7 @@ except Exception as error:
     storage_ready = False
     if is_missing_courses_table(error):
         storage_notice = (
-            "코스 저장소 설정 전입니다. GPX 미리보기는 바로 사용할 수 있으며, "
+            "코스 저장소 설정 전입니다. GPX 파일 분석은 바로 사용할 수 있으며, "
             "영구 등록은 database/migrations/001_create_running_activities.sql 적용 후 활성화됩니다."
         )
     else:
@@ -426,15 +426,6 @@ if get_user_role() == "admin":
                 st.rerun()
 
 display_courses = list(registered_courses)
-if preview_course:
-    display_courses.insert(
-        0,
-        {
-            **preview_course,
-            "name": f"{preview_course['name']} (미리보기)",
-            "color": [239, 68, 68, 230],
-        },
-    )
 
 with map_slot.container():
     render_course_map(display_courses)
