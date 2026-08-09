@@ -10,6 +10,21 @@ def get_supabase_client() -> Client:
     )
 
 
+@st.cache_resource
+def get_supabase_admin_client() -> Client:
+    service_role_key = st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not service_role_key:
+        raise RuntimeError(
+            "Supabase Service Role 키가 설정되지 않았습니다. "
+            "Streamlit secrets에 SUPABASE_SERVICE_ROLE_KEY를 추가해 주세요."
+        )
+
+    return create_client(
+        st.secrets["SUPABASE_URL"],
+        service_role_key,
+    )
+
+
 def check_supabase_connection() -> tuple[bool, str]:
     """
     Supabase 연결 상태를 확인한다.

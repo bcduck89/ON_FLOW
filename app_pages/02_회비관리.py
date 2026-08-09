@@ -8,16 +8,20 @@ from ui.auth_widgets import render_top_auth
 
 
 st.set_page_config(
-    page_title="거래관리 | ON_FLOW",
+    page_title="회비관리 | ON_FLOW",
     page_icon="💳",
     layout="wide",
 )
 
 init_auth_state()
-render_top_auth(current_page="pages/02_거래관리.py")
+render_top_auth(current_page="app_pages/02_회비관리.py")
 
-st.title("💳 거래관리")
-st.caption("ON_FLOW Transaction Management")
+st.title("💳 회비관리")
+st.caption("ON_FLOW Membership Fee Management")
+
+if not is_admin():
+    st.warning("회비관리는 관리자 권한으로 로그인해야 사용할 수 있습니다.")
+    st.stop()
 
 ok, msg = check_supabase_connection()
 
@@ -26,14 +30,10 @@ if not ok:
     st.caption(msg)
     st.stop()
 
-if not is_admin():
-    st.warning("거래관리는 관리자 또는 개발자 계정으로 로그인해야 사용할 수 있습니다.")
-    st.stop()
-
 st.divider()
 
 menu = st.radio(
-    "거래관리 메뉴",
+    "회비관리 메뉴",
     ["거래내역 업로드", "거래내역 조회"],
     horizontal=True,
 )
