@@ -114,7 +114,7 @@ def render_course_legend(courses: list[dict]) -> None:
     )
 
 
-def render_course_map(courses: list[dict], height: int = 560) -> None:
+def render_course_map(courses: list[dict], height: int = 680) -> None:
     path_rows = []
     endpoints = []
     course_labels = []
@@ -223,7 +223,7 @@ def render_course_map(courses: list[dict], height: int = 560) -> None:
             tooltip={"text": "{name}\n{details}"},
         ),
         height=height,
-        width="stretch",
+        width=height,
     )
     render_course_legend(courses)
     st.caption(
