@@ -8,6 +8,7 @@ import pandas as pd
 import pydeck as pdk
 import streamlit as st
 
+from database.client import has_supabase_admin_credentials
 from services.running_course_service import (
     GPXParseError,
     get_running_courses,
@@ -100,7 +101,7 @@ def render_course_legend(courses: list[dict]) -> None:
             f"<span>{course_name}</span></span>"
         )
 
-    if len(legend_items) < 2:
+    if not legend_items:
         return
 
     st.html(
@@ -302,6 +303,17 @@ except Exception as error:
     else:
         storage_notice = "등록된 코스를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요."
 
+recent_course = st.session_state.get("recently_registered_course")
+if recent_course:
+    recent_hash = recent_course.get("source_hash")
+    course_is_loaded = any(
+        course.get("source_hash") == recent_hash for course in registered_courses
+    )
+    if course_is_loaded:
+        st.session_state.pop("recently_registered_course", None)
+    else:
+        registered_courses.insert(0, recent_course)
+
 st.subheader("코스 지도")
 map_slot = st.empty()
 
@@ -318,7 +330,7 @@ preview_course = None
 if get_user_role() == "admin":
     st.subheader("GPX 코스 등록")
 
-    admin_storage_ready = "SUPABASE_SERVICE_ROLE_KEY" in st.secrets
+    admin_storage_ready = has_supabase_admin_credentials()
     if not admin_storage_ready:
         st.warning(
             "관리자 등록을 활성화하려면 Streamlit secrets에 "
@@ -389,7 +401,7 @@ if get_user_role() == "admin":
 
         if submitted:
             try:
-                register_running_course(
+                saved_course = register_running_course(
                     course_name,
                     course_run_date,
                     course_location,
@@ -407,6 +419,7 @@ if get_user_role() == "admin":
                     st.error("코스 등록에 실패했습니다. 잠시 후 다시 시도해 주세요.")
             else:
                 load_courses.clear()
+                st.session_state["recently_registered_course"] = saved_course
                 st.session_state["course_success_message"] = (
                     f"'{course_name}' 코스를 등록했습니다."
                 )
