@@ -30,7 +30,7 @@ if is_logged_in():
     st.info(f"권한: {USER_ROLES.get(role, role)}")
 
     if st.button("홈으로 이동", width="stretch"):
-        st.switch_page("app.py")
+        st.switch_page("app_pages/home.py")
 
     if st.button("로그아웃", width="stretch"):
         logout()
@@ -45,13 +45,14 @@ else:
 
         if submitted:
             if login(user_id, password):
-                return_to = st.session_state.get("return_to_page", "app.py")
+                return_to = st.session_state.get(
+                    "return_to_page", "app_pages/home.py"
+                )
 
-                if return_to == "pages/00_로그인.py":
-                    return_to = "app.py"
+                if return_to == "app_pages/00_로그인.py":
+                    return_to = "app_pages/home.py"
 
-                st.session_state["return_to_page"] = "app.py"
-                st.success("로그인되었습니다.")
+                st.session_state["return_to_page"] = "app_pages/home.py"
                 st.switch_page(return_to)
 
             else:

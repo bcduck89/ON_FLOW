@@ -9,7 +9,7 @@ from services.auth_service import (
 )
 
 
-def render_top_auth(current_page: str = "app.py") -> None:
+def render_top_auth(current_page: str = "app_pages/home.py") -> None:
     init_auth_state()
 
     left, right = st.columns([5, 1.4])
@@ -31,7 +31,7 @@ def render_top_auth(current_page: str = "app.py") -> None:
 
             if st.button("로그아웃", width="stretch"):
                 logout()
-                st.rerun()
+                st.switch_page("app_pages/home.py")
 
         else:
             st.markdown(
@@ -45,4 +45,4 @@ def render_top_auth(current_page: str = "app.py") -> None:
 
             if st.button("로그인", width="stretch"):
                 st.session_state["return_to_page"] = current_page
-                st.switch_page("pages/00_로그인.py")
+                st.switch_page("app_pages/00_로그인.py")

@@ -9,7 +9,7 @@ from core.constants import (
     MEMBER_TYPES,
 )
 from database.client import check_supabase_connection
-from services.auth_service import init_auth_state, is_developer
+from services.auth_service import init_auth_state, is_admin, is_developer
 from services.member_service import (
     get_member_list,
     get_raw_member_list,
@@ -29,10 +29,14 @@ st.set_page_config(
 )
 
 init_auth_state()
-render_top_auth(current_page="pages/01_회원관리.py")
+render_top_auth(current_page="app_pages/01_회원관리.py")
 
 st.title("👥 회원관리")
 st.caption("ON_FLOW Member Management")
+
+if not is_admin():
+    st.warning("회원관리는 관리자 권한으로 로그인해야 사용할 수 있습니다.")
+    st.stop()
 
 ok, msg = check_supabase_connection()
 
