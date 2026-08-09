@@ -1,6 +1,11 @@
 import unittest
+from unittest.mock import patch
 
-from services.running_course_service import GPXParseError, parse_gpx
+from services.running_course_service import (
+    GPXParseError,
+    delete_running_course,
+    parse_gpx,
+)
 
 
 SAMPLE_GPX = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -38,6 +43,33 @@ class ParseGpxTests(unittest.TestCase):
         unsafe = b'<!DOCTYPE gpx [<!ENTITY x "value">]><gpx>&x;</gpx>'
         with self.assertRaises(GPXParseError):
             parse_gpx(unsafe)
+
+
+class DeleteRunningCourseTests(unittest.TestCase):
+    def test_rejects_incorrect_admin_password(self):
+        with (
+            patch(
+                "services.running_course_service.verify_admin_password",
+                return_value=False,
+            ),
+            patch("services.running_course_service.delete_course") as delete,
+        ):
+            with self.assertRaises(PermissionError):
+                delete_running_course(7, "wrong-password")
+
+        delete.assert_not_called()
+
+    def test_deletes_course_after_password_verification(self):
+        with (
+            patch(
+                "services.running_course_service.verify_admin_password",
+                return_value=True,
+            ),
+            patch("services.running_course_service.delete_course") as delete,
+        ):
+            delete_running_course("7", "correct-password")
+
+        delete.assert_called_once_with(7)
 
 
 if __name__ == "__main__":

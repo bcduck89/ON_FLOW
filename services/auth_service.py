@@ -1,3 +1,5 @@
+import hmac
+
 import streamlit as st
 
 
@@ -66,3 +68,8 @@ def is_admin() -> bool:
 
 def is_developer() -> bool:
     return get_user_role() == "developer"
+
+
+def verify_admin_password(password: str) -> bool:
+    admin_password = str(st.secrets.get("ADMIN_PASSWORD", ""))
+    return bool(admin_password) and hmac.compare_digest(password, admin_password)

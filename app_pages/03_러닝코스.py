@@ -11,6 +11,7 @@ import streamlit as st
 from database.client import has_supabase_admin_credentials
 from services.running_course_service import (
     GPXParseError,
+    delete_running_course,
     get_running_courses,
     parse_gpx,
     register_running_course,
@@ -231,50 +232,97 @@ def render_course_map(courses: list[dict], height: int = 560) -> None:
     )
 
 
-def render_course_table(courses: list[dict]) -> None:
-    columns = [
-        "코스 이름",
-        "뛴 날짜",
-        "거리 (km)",
-        "누적 상승 (m)",
-        "소요 시간",
-        "지역",
-        "태그",
-        "설명",
-    ]
+def render_course_table(courses: list[dict], can_delete: bool) -> None:
+    columns = ["코스 이름", "거리 (km)", "지역"]
+    if can_delete:
+        columns.append("관리")
+
     course_rows = [
         {
             "코스 이름": course.get("name", ""),
-            "뛴 날짜": course.get("run_date", ""),
             "거리 (km)": course.get("distance_km", 0),
-            "누적 상승 (m)": course.get("elevation_gain_m", 0),
-            "소요 시간": format_duration(course.get("duration_seconds")),
             "지역": course.get("location_name", ""),
-            "태그": ", ".join(course.get("tags") or []),
-            "설명": course.get("description", ""),
+            **({"관리": ":material/delete: 삭제"} if can_delete else {}),
         }
         for course in courses
     ]
     course_frame = pd.DataFrame(course_rows, columns=columns)
-    course_frame["뛴 날짜"] = pd.to_datetime(
-        course_frame["뛴 날짜"], errors="coerce"
-    )
+
+    def handle_delete_click() -> None:
+        click = st.session_state.get("course_delete_click")
+        if not click:
+            return
+        row_index = int(click["row"])
+        if 0 <= row_index < len(courses):
+            st.session_state["course_pending_delete"] = courses[row_index]
+
+    column_config = {
+        "코스 이름": st.column_config.TextColumn("코스 이름", pinned=True),
+        "거리 (km)": st.column_config.NumberColumn("거리 (km)", format="%.2f"),
+        "지역": st.column_config.TextColumn("지역"),
+    }
+    if can_delete:
+        column_config["관리"] = st.column_config.ButtonColumn(
+            "",
+            width="small",
+            type="tertiary",
+            alignment="right",
+            on_click=handle_delete_click,
+            key="course_delete_click",
+        )
 
     st.dataframe(
         course_frame,
-        column_config={
-            "코스 이름": st.column_config.TextColumn("코스 이름", pinned=True),
-            "뛴 날짜": st.column_config.DateColumn("뛴 날짜", format="YYYY-MM-DD"),
-            "거리 (km)": st.column_config.NumberColumn("거리 (km)", format="%.2f"),
-            "누적 상승 (m)": st.column_config.NumberColumn(
-                "누적 상승 (m)", format="%d"
-            ),
-        },
+        column_config=column_config,
         hide_index=True,
         width="stretch",
     )
     if course_frame.empty:
         st.caption("아직 등록된 러닝 코스가 없습니다.")
+
+
+@st.dialog("코스 삭제")
+def confirm_course_deletion(course: dict) -> None:
+    course_name = str(course.get("name") or "러닝 코스")
+    st.warning(f"'{course_name}' 코스를 삭제하면 복구할 수 없습니다.")
+
+    with st.form(f"delete_course_{course.get('activity_id')}"):
+        admin_password = st.text_input(
+            "관리자 비밀번호",
+            type="password",
+            autocomplete="current-password",
+        )
+        with st.container(horizontal=True, horizontal_alignment="right"):
+            cancelled = st.form_submit_button("취소")
+            confirmed = st.form_submit_button(
+                "삭제",
+                type="primary",
+                icon=":material/delete:",
+            )
+
+    if cancelled:
+        st.session_state.pop("course_pending_delete", None)
+        st.rerun()
+
+    if confirmed:
+        try:
+            delete_running_course(course.get("activity_id"), admin_password)
+        except PermissionError as error:
+            st.error(str(error))
+        except Exception:
+            st.error("코스를 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        else:
+            recent_course = st.session_state.get("recently_registered_course")
+            if recent_course and recent_course.get("source_hash") == course.get(
+                "source_hash"
+            ):
+                st.session_state.pop("recently_registered_course", None)
+            st.session_state.pop("course_pending_delete", None)
+            load_courses.clear()
+            st.session_state["course_success_message"] = (
+                f"'{course_name}' 코스를 삭제했습니다."
+            )
+            st.rerun()
 
 
 st.set_page_config(
@@ -284,6 +332,7 @@ st.set_page_config(
 )
 
 render_top_auth(current_page="app_pages/03_러닝코스.py")
+is_admin_user = get_user_role() == "admin"
 
 st.title("러닝 코스")
 st.caption("GPX 파일로 ON:FLOW가 달린 코스를 지도에 기록하고 공유합니다.")
@@ -318,7 +367,14 @@ st.subheader("코스 지도")
 map_slot = st.empty()
 
 st.subheader("등록된 코스")
-render_course_table(registered_courses)
+render_course_table(registered_courses, can_delete=is_admin_user)
+
+pending_delete = st.session_state.get("course_pending_delete")
+if pending_delete:
+    if is_admin_user:
+        confirm_course_deletion(pending_delete)
+    else:
+        st.session_state.pop("course_pending_delete", None)
 
 if storage_notice:
     st.info(storage_notice)
@@ -327,7 +383,7 @@ if message := st.session_state.pop("course_success_message", None):
     st.success(message)
 
 preview_course = None
-if get_user_role() == "admin":
+if is_admin_user:
     st.subheader("GPX 코스 등록")
 
     admin_storage_ready = has_supabase_admin_credentials()
