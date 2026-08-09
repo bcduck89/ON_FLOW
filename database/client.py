@@ -43,7 +43,11 @@ def _secret_value(*names: str) -> str | None:
 
 def has_supabase_admin_credentials() -> bool:
     return bool(
-        _secret_value("SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY")
+        _secret_value(
+            "SUPABASE_SECRET_KEY",
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "SUPABASE_SERVICE_KEY",
+        )
     )
 
 
@@ -63,12 +67,14 @@ def get_supabase_client() -> Client:
 def get_supabase_admin_client() -> Client:
     supabase_url = _secret_value("SUPABASE_URL")
     service_role_key = _secret_value(
-        "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY"
+        "SUPABASE_SECRET_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_SERVICE_KEY",
     )
     if not service_role_key:
         raise RuntimeError(
-            "Supabase Service Role 키가 설정되지 않았습니다. "
-            "Streamlit secrets에 SUPABASE_SERVICE_ROLE_KEY를 추가해 주세요."
+            "Supabase 관리자 Secret 키가 설정되지 않았습니다. "
+            "Streamlit secrets에 SUPABASE_SECRET_KEY를 추가해 주세요."
         )
 
     if not supabase_url:

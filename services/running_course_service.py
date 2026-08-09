@@ -238,4 +238,12 @@ def delete_running_course(activity_id: int, admin_password: str) -> None:
     if course_id <= 0:
         raise ValueError("삭제할 코스 ID가 올바르지 않습니다.")
 
-    delete_course(course_id)
+    try:
+        delete_course(course_id)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "Supabase가 코스 삭제 요청을 거부했습니다. "
+            "등록된 관리자 Secret 키가 유효한지 확인해 주세요."
+        ) from exc

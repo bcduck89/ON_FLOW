@@ -71,6 +71,25 @@ class DeleteRunningCourseTests(unittest.TestCase):
 
         delete.assert_called_once_with(7)
 
+    def test_reports_supabase_delete_failure_without_leaking_details(self):
+        with (
+            patch(
+                "services.running_course_service.verify_admin_password",
+                return_value=True,
+            ),
+            patch(
+                "services.running_course_service.delete_course",
+                side_effect=Exception("sensitive backend details"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "관리자 Secret 키가 유효한지 확인",
+            ) as context:
+                delete_running_course(7, "correct-password")
+
+        self.assertNotIn("sensitive backend details", str(context.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

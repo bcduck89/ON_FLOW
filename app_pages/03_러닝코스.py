@@ -309,6 +309,8 @@ def confirm_course_deletion(course: dict) -> None:
             delete_running_course(course.get("activity_id"), admin_password)
         except PermissionError as error:
             st.error(str(error))
+        except RuntimeError as error:
+            st.error(str(error))
         except Exception:
             st.error("코스를 삭제하지 못했습니다. 잠시 후 다시 시도해 주세요.")
         else:
@@ -390,7 +392,7 @@ if is_admin_user:
     if not admin_storage_ready:
         st.warning(
             "관리자 등록을 활성화하려면 Streamlit secrets에 "
-            "SUPABASE_SERVICE_ROLE_KEY를 추가해야 합니다."
+            "SUPABASE_SECRET_KEY를 추가해야 합니다."
         )
 
     uploaded_file = st.file_uploader(
