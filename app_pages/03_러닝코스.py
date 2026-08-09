@@ -242,7 +242,7 @@ def render_course_table(courses: list[dict], can_delete: bool) -> None:
             "코스 이름": course.get("name", ""),
             "거리 (km)": course.get("distance_km", 0),
             "지역": course.get("location_name", ""),
-            **({"관리": ":material/delete: 삭제"} if can_delete else {}),
+            **({"관리": ":material/delete:"} if can_delete else {}),
         }
         for course in courses
     ]
@@ -257,16 +257,20 @@ def render_course_table(courses: list[dict], can_delete: bool) -> None:
             st.session_state["course_pending_delete"] = courses[row_index]
 
     column_config = {
-        "코스 이름": st.column_config.TextColumn("코스 이름", pinned=True),
-        "거리 (km)": st.column_config.NumberColumn("거리 (km)", format="%.2f"),
-        "지역": st.column_config.TextColumn("지역"),
+        "코스 이름": st.column_config.TextColumn(
+            "코스 이름", width=260, pinned=True
+        ),
+        "거리 (km)": st.column_config.NumberColumn(
+            "거리 (km)", width=110, format="%.2f"
+        ),
+        "지역": st.column_config.TextColumn("지역", width=160),
     }
     if can_delete:
         column_config["관리"] = st.column_config.ButtonColumn(
             "",
-            width="small",
+            width=52,
             type="tertiary",
-            alignment="right",
+            alignment="center",
             on_click=handle_delete_click,
             key="course_delete_click",
         )
@@ -275,7 +279,7 @@ def render_course_table(courses: list[dict], can_delete: bool) -> None:
         course_frame,
         column_config=column_config,
         hide_index=True,
-        width="stretch",
+        width="content",
     )
     if course_frame.empty:
         st.caption("아직 등록된 러닝 코스가 없습니다.")
