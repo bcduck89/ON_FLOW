@@ -6,7 +6,12 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 
-from repositories.running_course_repository import insert_course, list_courses
+from repositories.running_course_repository import (
+    delete_course,
+    insert_course,
+    list_courses,
+)
+from services.auth_service import verify_admin_password
 
 
 MAX_GPX_BYTES = 5 * 1024 * 1024
@@ -220,3 +225,25 @@ def register_running_course(
         "uploaded_by": uploaded_by.strip()[:80] or "admin",
     }
     return insert_course(row)
+
+
+def delete_running_course(activity_id: int, admin_password: str) -> None:
+    if not verify_admin_password(admin_password):
+        raise PermissionError("관리자 비밀번호가 올바르지 않습니다.")
+
+    try:
+        course_id = int(activity_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("삭제할 코스 ID가 올바르지 않습니다.") from exc
+    if course_id <= 0:
+        raise ValueError("삭제할 코스 ID가 올바르지 않습니다.")
+
+    try:
+        delete_course(course_id)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "Supabase가 코스 삭제 요청을 거부했습니다. "
+            "등록된 관리자 Secret 키가 유효한지 확인해 주세요."
+        ) from exc

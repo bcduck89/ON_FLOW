@@ -36,6 +36,22 @@ class DatabaseClientConfigTests(unittest.TestCase):
         ):
             self.assertTrue(has_supabase_admin_credentials())
 
+    def test_accepts_new_secret_key_from_top_level_secrets(self):
+        fake_streamlit = MagicMock()
+        fake_streamlit.secrets = {
+            "SUPABASE_SECRET_KEY": "new-format-secret-key"
+        }
+
+        with (
+            patch("database.client.st", fake_streamlit),
+            patch.dict(os.environ, {}, clear=True),
+        ):
+            self.assertTrue(has_supabase_admin_credentials())
+            self.assertEqual(
+                _secret_value("SUPABASE_SECRET_KEY"),
+                "new-format-secret-key",
+            )
+
     def test_reads_streamlit_connection_section(self):
         fake_streamlit = MagicMock()
         fake_streamlit.secrets = {

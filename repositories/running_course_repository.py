@@ -32,3 +32,13 @@ def insert_course(row: dict) -> dict:
         .execute()
     )
     return (response.data or [row])[0]
+
+
+def delete_course(activity_id: int) -> None:
+    (
+        get_supabase_admin_client()
+        .table("running_activities")
+        .delete()
+        .eq("activity_id", activity_id)
+        .execute()
+    )

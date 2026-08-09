@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from repositories.running_course_repository import list_courses
+from repositories.running_course_repository import delete_course, list_courses
 
 
 def query_client(rows):
@@ -11,6 +11,20 @@ def query_client(rows):
 
 
 class RunningCourseRepositoryTests(unittest.TestCase):
+    def test_deletes_course_by_activity_id_with_admin_client(self):
+        admin_client = MagicMock()
+
+        with patch(
+            "repositories.running_course_repository.get_supabase_admin_client",
+            return_value=admin_client,
+        ):
+            delete_course(17)
+
+        admin_client.table.assert_called_once_with("running_activities")
+        delete_query = admin_client.table.return_value.delete.return_value
+        delete_query.eq.assert_called_once_with("activity_id", 17)
+        delete_query.eq.return_value.execute.assert_called_once_with()
+
     def test_uses_admin_client_for_course_list_when_available(self):
         admin_client = query_client([{"activity_id": 1, "name": "동래 코스"}])
 
