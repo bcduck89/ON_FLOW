@@ -18,6 +18,11 @@ pages = [
         icon=":material/route:",
     ),
     st.Page(
+        "app_pages/04_정기러닝.py",
+        title="정기 러닝",
+        icon=":material/calendar_month:",
+    ),
+    st.Page(
         "app_pages/00_로그인.py",
         title="로그인",
         icon=":material/login:",
