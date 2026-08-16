@@ -31,22 +31,39 @@ def build_member_dashboard(
     reference_date = reference_date or date.today()
     members = members.copy()
 
+    dashboard_columns = [
+        "회원번호",
+        "이름",
+        "닉네임",
+        "유효종료일",
+        "납부유예마감일",
+        "상태",
+    ]
+
     if members.empty:
         return {
             "total": 0,
             "active": 0,
             "dormant": 0,
             "withdrawn": 0,
+            "fee_exempt": 0,
             "unpaid": 0,
-            "unpaid_members": pd.DataFrame(
-                columns=["회원번호", "이름", "닉네임", "납부유예마감일", "상태"]
-            ),
+            "removal_due": 0,
+            "unpaid_members": pd.DataFrame(columns=dashboard_columns),
+            "removal_due_members": pd.DataFrame(columns=dashboard_columns),
         }
 
     statuses = members.get(
         "status",
         pd.Series("", index=members.index, dtype="object"),
     ).fillna("").astype(str).str.strip()
+    membership_end_dates = pd.to_datetime(
+        members.get(
+            "membership_end",
+            pd.Series("", index=members.index, dtype="object"),
+        ),
+        errors="coerce",
+    ).dt.date
     grace_dates = pd.to_datetime(
         members.get(
             "grace_until",
@@ -55,34 +72,49 @@ def build_member_dashboard(
         errors="coerce",
     ).dt.date
 
-    unpaid_mask = statuses.ne("withdrawn") & (
-        grace_dates.isna() | grace_dates.lt(reference_date)
+    payment_managed_mask = statuses.isin(["active", "grace"])
+    unpaid_mask = (
+        payment_managed_mask
+        & membership_end_dates.notna()
+        & grace_dates.notna()
+        & membership_end_dates.lt(reference_date)
+        & grace_dates.ge(reference_date)
     )
-    unpaid_members = members.loc[unpaid_mask].copy()
-    unpaid_members["상태"] = statuses.loc[unpaid_mask].map(MEMBER_STATUS).fillna(
-        statuses.loc[unpaid_mask]
-    )
-    unpaid_members = unpaid_members.rename(
-        columns={
-            "member_code": "회원번호",
-            "name": "이름",
-            "nickname": "닉네임",
-            "grace_until": "납부유예마감일",
-        }
+    removal_due_mask = (
+        payment_managed_mask
+        & grace_dates.notna()
+        & grace_dates.lt(reference_date)
     )
 
-    display_columns = ["회원번호", "이름", "닉네임", "납부유예마감일", "상태"]
-    for column in display_columns:
-        if column not in unpaid_members.columns:
-            unpaid_members[column] = ""
+    def build_status_view(mask: pd.Series) -> pd.DataFrame:
+        view = members.loc[mask].copy()
+        view["상태"] = statuses.loc[mask].map(MEMBER_STATUS).fillna(statuses.loc[mask])
+        view = view.rename(
+            columns={
+                "member_code": "회원번호",
+                "name": "이름",
+                "nickname": "닉네임",
+                "membership_end": "유효종료일",
+                "grace_until": "납부유예마감일",
+            }
+        )
+
+        for column in dashboard_columns:
+            if column not in view.columns:
+                view[column] = ""
+
+        return view[dashboard_columns].reset_index(drop=True)
 
     return {
         "total": int(len(members)),
-        "active": int(statuses.eq("active").sum()),
+        "active": int(statuses.isin(["active", "grace", "fee_exempt"]).sum()),
         "dormant": int(statuses.eq("dormant").sum()),
         "withdrawn": int(statuses.eq("withdrawn").sum()),
+        "fee_exempt": int(statuses.eq("fee_exempt").sum()),
         "unpaid": int(unpaid_mask.sum()),
-        "unpaid_members": unpaid_members[display_columns].reset_index(drop=True),
+        "removal_due": int(removal_due_mask.sum()),
+        "unpaid_members": build_status_view(unpaid_mask),
+        "removal_due_members": build_status_view(removal_due_mask),
     }
 
 

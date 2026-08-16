@@ -15,27 +15,31 @@ class MemberDashboardTests(unittest.TestCase):
                     "name": "김활동",
                     "nickname": "활동이",
                     "status": "active",
-                    "grace_until": "2026-08-31",
+                    "membership_end": "2026-08-31",
+                    "grace_until": "2026-09-07",
                 },
                 {
                     "member_code": "M002",
-                    "name": "이미납",
+                    "name": "이강퇴",
                     "nickname": "",
                     "status": "active",
-                    "grace_until": "",
+                    "membership_end": "2026-07-31",
+                    "grace_until": "2026-08-07",
                 },
                 {
                     "member_code": "M003",
                     "name": "박휴면",
                     "nickname": "휴면이",
                     "status": "dormant",
-                    "grace_until": "2026-08-15",
+                    "membership_end": "2026-07-31",
+                    "grace_until": "2026-08-07",
                 },
                 {
                     "member_code": "M004",
                     "name": "최유예",
                     "nickname": "유예중",
                     "status": "grace",
+                    "membership_end": "2026-07-31",
                     "grace_until": "2026-08-16",
                 },
                 {
@@ -43,35 +47,66 @@ class MemberDashboardTests(unittest.TestCase):
                     "name": "정탈퇴",
                     "nickname": "",
                     "status": "withdrawn",
-                    "grace_until": "",
+                    "membership_end": "2026-07-31",
+                    "grace_until": "2026-08-07",
+                },
+                {
+                    "member_code": "M006",
+                    "name": "한예외",
+                    "nickname": "사유있음",
+                    "status": "fee_exempt",
+                    "membership_end": "2026-07-31",
+                    "grace_until": "2026-08-07",
+                },
+                {
+                    "member_code": "M007",
+                    "name": "윤미납",
+                    "nickname": "",
+                    "status": "active",
+                    "membership_end": "2026-08-15",
+                    "grace_until": "2026-08-22",
                 },
             ]
         )
 
-    def test_builds_status_counts_and_excludes_withdrawn_from_unpaid(self):
+    def test_unpaid_is_limited_to_active_members_in_the_grace_window(self):
         dashboard = build_member_dashboard(
             self.members,
             reference_date=date(2026, 8, 16),
         )
 
-        self.assertEqual(dashboard["total"], 5)
-        self.assertEqual(dashboard["active"], 2)
+        self.assertEqual(dashboard["total"], 7)
+        self.assertEqual(dashboard["active"], 5)
         self.assertEqual(dashboard["dormant"], 1)
         self.assertEqual(dashboard["withdrawn"], 1)
+        self.assertEqual(dashboard["fee_exempt"], 1)
         self.assertEqual(dashboard["unpaid"], 2)
         self.assertEqual(
             dashboard["unpaid_members"]["이름"].tolist(),
-            ["이미납", "박휴면"],
+            ["최유예", "윤미납"],
         )
 
-    def test_grace_deadline_is_included_through_the_deadline_date(self):
+    def test_members_past_grace_are_separate_removal_candidates(self):
+        dashboard = build_member_dashboard(
+            self.members,
+            reference_date=date(2026, 8, 16),
+        )
+
+        self.assertEqual(dashboard["removal_due"], 1)
+        self.assertEqual(
+            dashboard["removal_due_members"]["이름"].tolist(),
+            ["이강퇴"],
+        )
+
+    def test_grace_deadline_is_unpaid_through_the_deadline_date(self):
         dashboard = build_member_dashboard(
             self.members,
             reference_date=date(2026, 8, 17),
         )
 
-        self.assertEqual(dashboard["unpaid"], 3)
-        self.assertIn("최유예", dashboard["unpaid_members"]["이름"].tolist())
+        self.assertEqual(dashboard["unpaid"], 1)
+        self.assertEqual(dashboard["removal_due"], 2)
+        self.assertIn("최유예", dashboard["removal_due_members"]["이름"].tolist())
 
     def test_message_is_ready_to_copy(self):
         dashboard = build_member_dashboard(
@@ -81,8 +116,8 @@ class MemberDashboardTests(unittest.TestCase):
         message = build_unpaid_fee_message(dashboard["unpaid_members"])
 
         self.assertIn("안녕하세요, ON:FLOW입니다", message)
-        self.assertIn("- 이미납", message)
-        self.assertIn("- 박휴면(휴면이)", message)
+        self.assertIn("- 최유예(유예중)", message)
+        self.assertIn("- 윤미납", message)
         self.assertIn("이미 납부하셨다면", message)
 
 
