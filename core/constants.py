@@ -15,7 +15,7 @@ MEMBER_TYPES = {
 MEMBER_STATUS = {
     "active": "활동",
     "grace": "납부유예",
-    "dormant": "휴면",
+    "fee_exempt": "납부예외",
     "withdrawn": "탈퇴",
 }
 

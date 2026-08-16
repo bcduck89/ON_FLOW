@@ -13,6 +13,8 @@ from core.constants import (
 from database.client import check_supabase_connection
 from services.auth_service import init_auth_state, is_admin, is_developer
 from services.member_service import (
+    build_unpaid_fee_message,
+    get_member_dashboard,
     get_member_list,
     get_raw_member_list,
     add_member,
@@ -75,10 +77,116 @@ today = date.today()
 earliest_date, latest_date = date_input_bounds(today)
 
 
-menu = st.radio(
+# =========================================================
+# 대시보드
+# =========================================================
+with st.container():
+    st.subheader("회원 현황")
+
+    try:
+        dashboard = get_member_dashboard(reference_date=today)
+
+        st.html(
+            """
+            <style>
+            .st-key-member_total_card {background:#eff6ff;border-color:#93c5fd;border-left:5px solid #2563eb;}
+            .st-key-member_active_card {background:#ecfdf5;border-color:#86efac;border-left:5px solid #16a34a;}
+            .st-key-member_withdrawn_card {background:#f8fafc;border-color:#cbd5e1;border-left:5px solid #64748b;}
+            .st-key-member_unpaid_card {background:#fff7ed;border-color:#fdba74;border-left:5px solid #f97316;}
+            .st-key-member_exempt_card {background:#faf5ff;border-color:#d8b4fe;border-left:5px solid #9333ea;}
+            .st-key-member_removal_card {background:#fef2f2;border-color:#fca5a5;border-left:5px solid #dc2626;}
+            </style>
+            """
+        )
+
+        metric_cards = [
+            ("member_total_card", "총 등록 인원", dashboard["total"]),
+            ("member_active_card", "현 활동인원", dashboard["active"]),
+            ("member_withdrawn_card", "탈퇴인원", dashboard["withdrawn"]),
+            ("member_unpaid_card", "회비미납인원", dashboard["unpaid"]),
+            ("member_exempt_card", "납부예외인원", dashboard["fee_exempt"]),
+            ("member_removal_card", "강퇴조치 대상", dashboard["removal_due"]),
+        ]
+
+        with st.container(horizontal=True):
+            for card_key, label, value in metric_cards:
+                with st.container(border=True, key=card_key):
+                    st.metric(label, f"{value}명")
+
+        st.caption(
+            "회비 미납은 유효종료일 다음 날부터 납부유예마감일까지 집계합니다. "
+            "납부예외·탈퇴 회원은 제외됩니다."
+        )
+
+        show_unpaid = st.session_state.get("show_unpaid_members", False)
+        button_label = "회비 미납인원 접기" if show_unpaid else "회비 미납인원 보기"
+        show_removal_due = st.session_state.get("show_removal_due_members", False)
+        removal_button_label = (
+            "강퇴조치 대상 접기" if show_removal_due else "강퇴조치 대상 보기"
+        )
+
+        with st.container(gap="small", width="content"):
+            if st.button(button_label, icon=":material/groups:"):
+                st.session_state["show_unpaid_members"] = not show_unpaid
+                show_unpaid = not show_unpaid
+
+            if st.button(removal_button_label, icon=":material/person_remove:"):
+                st.session_state["show_removal_due_members"] = not show_removal_due
+                show_removal_due = not show_removal_due
+
+        if show_unpaid:
+            st.markdown("#### 회비 미납인원")
+            unpaid_members = dashboard["unpaid_members"]
+
+            if unpaid_members.empty:
+                st.success("현재 회비 납부 확인이 필요한 회원이 없습니다.")
+            else:
+                st.dataframe(
+                    unpaid_members,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+                st.markdown("#### 카카오톡 안내문")
+                st.caption("아래 문구 오른쪽 위의 복사 버튼을 눌러 바로 붙여넣을 수 있습니다.")
+                st.code(
+                    build_unpaid_fee_message(unpaid_members),
+                    language=None,
+                    wrap_lines=True,
+                )
+
+        if show_removal_due:
+            st.markdown("#### 강퇴조치 대상")
+            removal_due_members = dashboard["removal_due_members"]
+
+            if removal_due_members.empty:
+                st.success("현재 강퇴조치 대상 회원이 없습니다.")
+            else:
+                st.warning(
+                    "납부유예마감일이 지난 회원입니다. 조치 전 납부 여부와 "
+                    "납부예외 사유를 확인해주세요."
+                )
+                st.dataframe(
+                    removal_due_members,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+    except Exception as e:
+        st.error("회원 현황을 불러오는 중 오류가 발생했습니다.")
+        st.exception(e)
+
+
+st.divider()
+
+menu = st.segmented_control(
     "회원관리 메뉴",
     ["회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
-    horizontal=True,
+    default="회원 목록",
+    required=True,
+    key="member_management_menu",
+    label_visibility="collapsed",
+    width="stretch",
 )
 
 
@@ -272,6 +380,10 @@ elif menu == "회원정보 수정 / 삭제":
     selected_row = raw_members[raw_members["label"] == selected_label].iloc[0]
     member_id = int(selected_row["member_id"])
 
+    with st.container(horizontal=True):
+        st.metric("정기 러닝 참석", f"{int(selected_row.get('정기 참석횟수', 0))}회")
+        st.metric("자유 러닝 참석", f"{int(selected_row.get('자유 참석횟수', 0))}회")
+
     st.divider()
 
     with st.form("edit_member_form"):
@@ -358,6 +470,7 @@ elif menu == "회원정보 수정 / 삭제":
                 index=status_index,
                 format_func=lambda x: MEMBER_STATUS[x],
             )
+            st.caption("납부예외로 변경하는 경우 사유를 비고에 기록해주세요.")
 
         edit_memo = st.text_area(
             "비고",

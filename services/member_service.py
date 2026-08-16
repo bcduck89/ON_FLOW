@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 
 from core.constants import (
@@ -13,12 +15,207 @@ from repositories.member_repository import (
     update_member,
     delete_member,
 )
+from repositories.regular_run_repository import list_regular_runs
 from services.transaction_engine import reprocess_transactions_for_member
 from utils.date_utils import calculate_age
 
 
 def get_raw_member_list() -> pd.DataFrame:
-    return list_members()
+    return add_member_attendance_counts(list_members())
+
+
+def _get_payment_status_masks(
+    members: pd.DataFrame,
+    reference_date: date,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    statuses = members.get(
+        "status",
+        pd.Series("", index=members.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+    membership_end_dates = pd.to_datetime(
+        members.get(
+            "membership_end",
+            pd.Series("", index=members.index, dtype="object"),
+        ),
+        errors="coerce",
+    ).dt.date
+    grace_dates = pd.to_datetime(
+        members.get(
+            "grace_until",
+            pd.Series("", index=members.index, dtype="object"),
+        ),
+        errors="coerce",
+    ).dt.date
+
+    payment_managed_mask = statuses.isin(["active", "grace"])
+    unpaid_mask = (
+        payment_managed_mask
+        & membership_end_dates.notna()
+        & grace_dates.notna()
+        & membership_end_dates.lt(reference_date)
+        & grace_dates.ge(reference_date)
+    )
+    removal_due_mask = (
+        payment_managed_mask
+        & grace_dates.notna()
+        & grace_dates.lt(reference_date)
+    )
+    return statuses, unpaid_mask, removal_due_mask
+
+
+def annotate_removal_due_memo(
+    members: pd.DataFrame,
+    reference_date: date | None = None,
+) -> pd.DataFrame:
+    if members.empty:
+        return members.copy()
+
+    annotated = members.copy()
+    _, _, removal_due_mask = _get_payment_status_masks(
+        annotated,
+        reference_date or date.today(),
+    )
+    memo = annotated.get(
+        "memo",
+        pd.Series("", index=annotated.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+
+    def add_removal_label(value: str) -> str:
+        if "강퇴조치 대상" in value:
+            return value
+        return f"{value} · 강퇴조치 대상" if value else "강퇴조치 대상"
+
+    annotated["memo"] = memo
+    annotated.loc[removal_due_mask, "memo"] = memo.loc[removal_due_mask].apply(
+        add_removal_label
+    )
+    return annotated
+
+
+def build_member_dashboard(
+    members: pd.DataFrame,
+    reference_date: date | None = None,
+) -> dict:
+    """회원 현황과 회비 미납 회원 목록을 계산한다."""
+    reference_date = reference_date or date.today()
+    members = members.copy()
+
+    dashboard_columns = [
+        "회원번호",
+        "이름",
+        "닉네임",
+        "유효종료일",
+        "납부유예마감일",
+        "상태",
+    ]
+
+    if members.empty:
+        return {
+            "total": 0,
+            "active": 0,
+            "withdrawn": 0,
+            "fee_exempt": 0,
+            "unpaid": 0,
+            "removal_due": 0,
+            "unpaid_members": pd.DataFrame(columns=dashboard_columns),
+            "removal_due_members": pd.DataFrame(columns=dashboard_columns),
+        }
+
+    statuses, unpaid_mask, removal_due_mask = _get_payment_status_masks(
+        members,
+        reference_date,
+    )
+
+    def build_status_view(mask: pd.Series) -> pd.DataFrame:
+        view = members.loc[mask].copy()
+        view["상태"] = statuses.loc[mask].map(MEMBER_STATUS).fillna(statuses.loc[mask])
+        view = view.rename(
+            columns={
+                "member_code": "회원번호",
+                "name": "이름",
+                "nickname": "닉네임",
+                "membership_end": "유효종료일",
+                "grace_until": "납부유예마감일",
+            }
+        )
+
+        for column in dashboard_columns:
+            if column not in view.columns:
+                view[column] = ""
+
+        return view[dashboard_columns].reset_index(drop=True)
+
+    return {
+        "total": int(len(members)),
+        "active": int(statuses.isin(["active", "grace", "fee_exempt"]).sum()),
+        "withdrawn": int(statuses.eq("withdrawn").sum()),
+        "fee_exempt": int(statuses.eq("fee_exempt").sum()),
+        "unpaid": int(unpaid_mask.sum()),
+        "removal_due": int(removal_due_mask.sum()),
+        "unpaid_members": build_status_view(unpaid_mask),
+        "removal_due_members": build_status_view(removal_due_mask),
+    }
+
+
+def get_member_dashboard(reference_date: date | None = None) -> dict:
+    return build_member_dashboard(list_members(), reference_date=reference_date)
+
+
+def build_unpaid_fee_message(unpaid_members: pd.DataFrame) -> str:
+    if unpaid_members.empty:
+        return "현재 회비 납부 확인이 필요한 회원이 없습니다. 감사합니다 😊"
+
+    names = []
+    for _, member in unpaid_members.iterrows():
+        name = str(member.get("이름", "")).strip()
+        nickname = str(member.get("닉네임", "")).strip()
+        display_name = f"{name}({nickname})" if nickname and nickname != name else name
+        if display_name:
+            names.append(display_name)
+
+    member_lines = "\n".join(f"- {name}" for name in names)
+    return (
+        "안녕하세요, ON:FLOW입니다 😊\n"
+        "회비 납부 확인이 필요한 분을 안내드립니다.\n"
+        f"{member_lines}\n"
+        "이미 납부하셨다면 편하게 말씀해주세요. 감사합니다!"
+    )
+
+
+def add_member_attendance_counts(
+    members: pd.DataFrame,
+    regular_runs: list[dict] | None = None,
+) -> pd.DataFrame:
+    counted = members.copy()
+    counted["정기 참석횟수"] = 0
+    counted["자유 참석횟수"] = 0
+    if counted.empty:
+        return counted
+
+    if regular_runs is None:
+        try:
+            regular_runs = list_regular_runs()
+        except Exception:
+            regular_runs = []
+
+    for member_index, member in counted.iterrows():
+        identities = {
+            str(value or "").replace(" ", "").casefold()
+            for value in (member.get("name", ""), member.get("nickname", ""))
+            if str(value or "").strip()
+        }
+        for run in regular_runs:
+            attendee_keys = {
+                str(name or "").replace(" ", "").casefold()
+                for name in (run.get("attendee_names") or [])
+            }
+            if identities.isdisjoint(attendee_keys):
+                continue
+            if run.get("run_type") == "정기":
+                counted.at[member_index, "정기 참석횟수"] += 1
+            elif run.get("run_type") == "자유":
+                counted.at[member_index, "자유 참석횟수"] += 1
+    return counted
 
 
 def get_member_list() -> pd.DataFrame:
@@ -27,7 +224,9 @@ def get_member_list() -> pd.DataFrame:
     if members.empty:
         return members
 
-    members = members.copy()
+    members = annotate_removal_due_memo(members)
+
+    members = add_member_attendance_counts(members)
 
     members["나이 (만)"] = members["birth_date"].apply(calculate_age)
 
@@ -68,6 +267,8 @@ def get_member_list() -> pd.DataFrame:
         "회원구분",
         "이름",
         "닉네임",
+        "정기 참석횟수",
+        "자유 참석횟수",
         "생년월일",
         "나이 (만)",
         "성별",
