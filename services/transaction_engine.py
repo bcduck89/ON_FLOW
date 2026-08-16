@@ -4,13 +4,11 @@ from parsers.kakaobank_parser import parse_kakaobank_excel
 from repositories.member_repository import list_members
 from repositories.transaction_repository import (
     list_transactions,
+    list_reprocessable_transactions,
     get_existing_hashes,
     insert_transactions,
     update_transaction,
 )
-from services.fee_engine import get_months_from_amount, apply_fee_payment
-
-from repositories.transaction_repository import list_reprocessable_transactions
 from services.fee_engine import get_months_from_amount, apply_fee_payment
 
 
@@ -57,14 +55,16 @@ def import_kakaobank_excel(uploaded_file) -> pd.DataFrame:
                 }
             )
 
-    # 저장 후 새 거래들을 다시 DB에서 읽어서 transaction_id 확보
+    # 저장 후 DB에서 transaction_id와 현재 처리상태를 확보한다.
     transactions = list_transactions()
-    new_hashes = set(new_df["transaction_hash"].astype(str).tolist()) if not new_df.empty else set()
-    saved_new = transactions[
-        transactions["transaction_hash"].astype(str).isin(new_hashes)
+    uploaded_hashes = set(parsed["transaction_hash"].astype(str).tolist())
+    reprocessable_statuses = {"uploaded", "unmatched", "need_review"}
+    processing_targets = transactions[
+        transactions["transaction_hash"].astype(str).isin(uploaded_hashes)
+        & transactions["process_status"].astype(str).isin(reprocessable_statuses)
     ].copy()
 
-    fee_results = _apply_fee_engine(saved_new)
+    fee_results = _apply_fee_engine(processing_targets)
 
     if fee_results:
         result_rows.extend(fee_results)
@@ -121,10 +121,11 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
             result_rows.append(
                 {
                     "거래일시": tx.get("transaction_datetime", ""),
+                    "입출금": direction,
                     "입금자/내용": payer,
                     "금액": amount,
                     "처리결과": "확인필요",
-                    "사유": "2,000원 또는 6,000원 입금이 아님",
+                    "사유": "2,000원 단위 입금이 아님",
                 }
             )
             continue
@@ -136,6 +137,7 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
             result_rows.append(
                 {
                     "거래일시": tx.get("transaction_datetime", ""),
+                    "입출금": direction,
                     "입금자/내용": payer,
                     "금액": amount,
                     "처리결과": "미매칭",
@@ -149,6 +151,7 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
             result_rows.append(
                 {
                     "거래일시": tx.get("transaction_datetime", ""),
+                    "입출금": direction,
                     "입금자/내용": payer,
                     "금액": amount,
                     "처리결과": "확인필요",
@@ -170,6 +173,7 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
         result_rows.append(
             {
                 "거래일시": tx.get("transaction_datetime", ""),
+                "입출금": direction,
                 "입금자/내용": payer,
                 "금액": amount,
                 "회원": member.get("name", ""),
@@ -229,6 +233,7 @@ def reprocess_transactions_for_member(member: dict) -> pd.DataFrame:
         result_rows.append(
             {
                 "거래일시": tx.get("transaction_datetime", ""),
+                "입출금": direction,
                 "입금자": deposit_name,
                 "금액": amount,
                 "회원": member.get("name", ""),

@@ -2,19 +2,10 @@ from datetime import date
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
-from core.constants import MONTHLY_FEE, QUARTERLY_FEE, GRACE_DAYS
+from core.constants import GRACE_DAYS
 from repositories.fee_repository import insert_fee_payment
 from repositories.member_repository import update_member
-
-
-def get_months_from_amount(amount: int) -> int:
-    if amount == MONTHLY_FEE:
-        return 1
-
-    if amount == QUARTERLY_FEE:
-        return 3
-
-    return 0
+from services.fee_engine import get_months_from_amount
 
 
 def calculate_membership_period(paid_at, months: int):
@@ -42,7 +33,7 @@ def register_fee_payment(
     months = get_months_from_amount(amount)
 
     if months == 0:
-        raise ValueError("회비 금액은 2,000원 또는 6,000원만 자동 반영됩니다.")
+        raise ValueError("회비 금액은 2,000원 단위로 입력해야 합니다.")
 
     valid_from, valid_until, grace_until = calculate_membership_period(
         paid_at,

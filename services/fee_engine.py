@@ -1,20 +1,22 @@
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 
-from core.constants import MONTHLY_FEE, QUARTERLY_FEE, GRACE_DAYS
+from core.constants import MONTHLY_FEE, GRACE_DAYS
 from repositories.fee_repository import insert_fee_payment, fee_exists_for_transaction
 from repositories.member_repository import update_member
 from repositories.transaction_repository import update_transaction
 
 
 def get_months_from_amount(amount: int) -> int:
-    if int(amount) == MONTHLY_FEE:
-        return 1
+    try:
+        amount = int(amount)
+    except (TypeError, ValueError):
+        return 0
 
-    if int(amount) == QUARTERLY_FEE:
-        return 3
+    if amount <= 0 or amount % MONTHLY_FEE != 0:
+        return 0
 
-    return 0
+    return amount // MONTHLY_FEE
 
 
 def calculate_membership_period(paid_at, months: int):
