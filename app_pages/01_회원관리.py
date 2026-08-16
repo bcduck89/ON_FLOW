@@ -77,17 +77,10 @@ today = date.today()
 earliest_date, latest_date = date_input_bounds(today)
 
 
-menu = st.radio(
-    "회원관리 메뉴",
-    ["대시보드", "회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
-    horizontal=True,
-)
-
-
 # =========================================================
 # 대시보드
 # =========================================================
-if menu == "대시보드":
+with st.container():
     st.subheader("회원 현황")
 
     try:
@@ -153,10 +146,23 @@ if menu == "대시보드":
         st.exception(e)
 
 
+st.divider()
+
+menu = st.segmented_control(
+    "회원관리 메뉴",
+    ["회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
+    default="회원 목록",
+    required=True,
+    key="member_management_menu",
+    label_visibility="collapsed",
+    width="stretch",
+)
+
+
 # =========================================================
 # 회원 목록
 # =========================================================
-elif menu == "회원 목록":
+if menu == "회원 목록":
     st.subheader("회원 목록")
 
     try:
