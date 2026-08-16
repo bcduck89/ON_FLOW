@@ -1,21 +1,34 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import io
+import mimetypes
 import os
 import re
 import shutil
+import uuid
 from datetime import date, time
 from pathlib import Path
 
 import pandas as pd
+import streamlit as st
 
-from repositories.regular_run_repository import insert_regular_run, list_regular_runs
+from repositories.regular_run_repository import (
+    REGULAR_RUN_IMAGE_BUCKET,
+    find_regular_run_by_source_hash,
+    insert_regular_run,
+    list_regular_runs,
+    remove_regular_run_image,
+    update_regular_run as update_regular_run_row,
+    upload_regular_run_image,
+)
+from repositories.member_repository import list_members
+from utils.weekday_utils import get_korean_weekday
 
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 25_000_000
-KOREAN_WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")
 ATTENDEE_IGNORE_WORDS = {
     "참석자",
     "참가자",
@@ -35,6 +48,21 @@ class RegularRunImageError(ValueError):
 
 class OCRUnavailableError(RuntimeError):
     """OCR 실행 환경이 준비되지 않았을 때 발생한다."""
+
+
+class DuplicateRegularRunError(ValueError):
+    """같은 캡처 이미지로 등록한 러닝 데이터가 이미 있을 때 발생한다."""
+
+
+class RegularRunStorageError(RuntimeError):
+    """러닝 데이터 또는 캡처 이미지 저장에 실패했을 때 발생한다."""
+
+
+def has_paddle_ocr_runtime() -> bool:
+    return bool(
+        importlib.util.find_spec("paddleocr")
+        and importlib.util.find_spec("paddle")
+    )
 
 
 def _clean_line(value: str) -> str:
@@ -107,16 +135,6 @@ def _extract_time(text: str) -> time | None:
     return None
 
 
-def get_korean_weekday(value: date | str | None) -> str:
-    if value in (None, ""):
-        return ""
-    try:
-        parsed = pd.to_datetime(value).date()
-    except (TypeError, ValueError):
-        return ""
-    return f"{KOREAN_WEEKDAYS[parsed.weekday()]}요일"
-
-
 def _extract_participant_count(text: str) -> int:
     patterns = (
         r"(?:참석자|참가자)\s*\(\s*(\d+)\s*명\s*\)",
@@ -172,6 +190,31 @@ def _extract_attendees_from_layout(
     ]
     if not content:
         return []
+
+    # 소모임 참석자 화면은 이름 아래에 상태 메시지나 이모지가 붙습니다.
+    # 행 간격만으로 묶으면 다음 참석자의 이름이 앞사람 상태 메시지와 같은
+    # 그룹으로 합쳐질 수 있으므로, 참석 인원 수를 아는 경우 큰 글자 행을
+    # 이름으로 우선 선택합니다.
+    if expected_count and len(content) >= expected_count:
+        ranked = sorted(
+            content,
+            key=lambda item: (
+                -int(item["height"]),
+                int(item["top"]),
+                int(item["left"]),
+            ),
+        )
+        selected = sorted(
+            ranked[:expected_count],
+            key=lambda item: (int(item["top"]), int(item["left"])),
+        )
+        names = []
+        for line in selected:
+            name = _normalize_attendee_name(line["text"])
+            if name not in names:
+                names.append(name)
+        if len(names) == expected_count:
+            return names
 
     heights = sorted(max(1, int(line["height"])) for line in content)
     median_height = heights[len(heights) // 2]
@@ -251,7 +294,87 @@ def parse_regular_run_text(
     }
 
 
-def extract_regular_run_from_image(data: bytes, filename: str = "capture.png") -> dict:
+def _paddle_result_to_lines(results) -> list[dict]:
+    lines = []
+    for result in results:
+        texts = result["rec_texts"]
+        scores = result["rec_scores"]
+        boxes = result["rec_boxes"]
+        for text, score, box in zip(texts, scores, boxes):
+            text = _clean_line(str(text))
+            if not text or float(score) < 0.35:
+                continue
+            left, top, right, bottom = (int(round(float(value))) for value in box)
+            lines.append(
+                {
+                    "text": text,
+                    "left": left,
+                    "top": top,
+                    "height": max(1, bottom - top),
+                    "confidence": float(score),
+                }
+            )
+    return sorted(lines, key=lambda line: (line["top"], line["left"]))
+
+
+@st.cache_resource(show_spinner=False)
+def _get_paddle_ocr():
+    os.environ.setdefault("FLAGS_use_mkldnn", "0")
+    os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+    os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError as exc:
+        raise OCRUnavailableError("PaddleOCR 한국어 모델이 설치되지 않았습니다.") from exc
+
+    return PaddleOCR(
+        text_detection_model_name="PP-OCRv5_mobile_det",
+        text_recognition_model_name="korean_PP-OCRv5_mobile_rec",
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        enable_mkldnn=False,
+        device="cpu",
+    )
+
+
+def _extract_regular_run_with_paddle(data: bytes, filename: str = "capture.png") -> dict:
+    if not data:
+        raise RegularRunImageError("이미지 파일이 비어 있습니다.")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise RegularRunImageError("이미지는 최대 10MB까지 업로드할 수 있습니다.")
+
+    try:
+        import numpy as np
+        from PIL import Image, UnidentifiedImageError
+
+        image = Image.open(io.BytesIO(data))
+        image.load()
+        image = image.convert("RGB")
+    except ImportError as exc:
+        raise OCRUnavailableError("PaddleOCR 이미지 처리 패키지가 설치되지 않았습니다.") from exc
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError) as exc:
+        raise RegularRunImageError("PNG, JPG 또는 WEBP 이미지인지 확인해주세요.") from exc
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        raise RegularRunImageError("이미지 해상도가 너무 큽니다. 2,500만 픽셀 이하로 줄여주세요.")
+
+    try:
+        results = _get_paddle_ocr().predict(np.asarray(image))
+        ocr_lines = _paddle_result_to_lines(results)
+    except OCRUnavailableError:
+        raise
+    except Exception as exc:
+        raise OCRUnavailableError("PaddleOCR 한국어 모델을 실행하지 못했습니다.") from exc
+
+    raw_text = "\n".join(line["text"] for line in ocr_lines)
+    if not raw_text.strip():
+        raise RegularRunImageError("이미지에서 글자를 찾지 못했습니다. 더 선명한 캡처를 사용해주세요.")
+    result = parse_regular_run_text(raw_text, filename=filename, ocr_lines=ocr_lines)
+    result["recognition_method"] = "PaddleOCR PP-OCRv5 한국어 모델"
+    return result
+
+
+def _extract_regular_run_with_tesseract(data: bytes, filename: str = "capture.png") -> dict:
     if not data:
         raise RegularRunImageError("이미지 파일이 비어 있습니다.")
     if len(data) > MAX_IMAGE_BYTES:
@@ -357,15 +480,78 @@ def extract_regular_run_from_image(data: bytes, filename: str = "capture.png") -
 
     if not raw_text.strip():
         raise RegularRunImageError("이미지에서 글자를 찾지 못했습니다. 더 선명한 캡처를 사용해주세요.")
-    return parse_regular_run_text(raw_text, filename=filename, ocr_lines=ocr_lines)
+    result = parse_regular_run_text(raw_text, filename=filename, ocr_lines=ocr_lines)
+    result["recognition_method"] = "Tesseract OCR"
+    return result
+
+
+def extract_regular_run_from_image(data: bytes, filename: str = "capture.png") -> dict:
+    try:
+        return _extract_regular_run_with_paddle(data, filename)
+    except (OCRUnavailableError, RegularRunImageError) as paddle_error:
+        try:
+            result = _extract_regular_run_with_tesseract(data, filename)
+        except (OCRUnavailableError, RegularRunImageError):
+            raise paddle_error
+        result["recognition_warning"] = (
+            "PaddleOCR 한국어 모델을 사용할 수 없어 Tesseract OCR로 대신 읽었습니다."
+        )
+        return result
+
+
+def default_run_type_for_date(run_date: date | None) -> str:
+    return "정기" if run_date and run_date.weekday() == 6 else "자유"
+
+
+def _member_identity_key(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "")).casefold()
+
+
+def match_attendee_names_to_members(
+    attendee_names: list[str],
+    members: pd.DataFrame | None = None,
+) -> list[str]:
+    """OCR 이름을 회원 이름·닉네임과 대조해 실제 이름으로 변환한다."""
+    if not attendee_names:
+        return []
+
+    members = list_members() if members is None else members
+    if members.empty:
+        return attendee_names
+
+    candidates: dict[str, set[str]] = {}
+    for _, member in members.iterrows():
+        actual_name = str(member.get("name", "")).strip()
+        if not actual_name:
+            continue
+        for identity in (actual_name, member.get("nickname", "")):
+            key = _member_identity_key(identity)
+            if key:
+                candidates.setdefault(key, set()).add(actual_name)
+
+    unique_matches = {
+        key: next(iter(names))
+        for key, names in candidates.items()
+        if len(names) == 1
+    }
+    return [
+        unique_matches.get(_member_identity_key(name), name)
+        for name in attendee_names
+    ]
+
+
+def get_regular_run_records() -> list[dict]:
+    return list_regular_runs()
 
 
 def get_regular_run_list() -> pd.DataFrame:
     rows = list_regular_runs()
     columns = [
+        "구분",
         "날짜",
         "요일",
         "시간",
+        "거리 (km)",
         "총 참석인원",
         "참석자 명단",
     ]
@@ -379,9 +565,11 @@ def get_regular_run_list() -> pd.DataFrame:
     )
     view = view.rename(
         columns={
+            "run_type": "구분",
             "run_date": "날짜",
             "weekday": "요일",
             "start_time": "시간",
+            "distance_km": "거리 (km)",
             "participant_count": "총 참석인원",
             "attendee_names": "참석자 명단",
         }
@@ -392,8 +580,43 @@ def get_regular_run_list() -> pd.DataFrame:
     return view[columns]
 
 
+def update_regular_run(
+    *,
+    regular_run_id: int,
+    run_type: str,
+    run_date: date,
+    start_time: time | None,
+    distance_km: float,
+    participant_count: int,
+    attendee_names: list[str],
+) -> dict:
+    run_type = (run_type or "").strip()
+    if run_type not in {"정기", "자유"}:
+        raise ValueError("러닝 구분은 정기 또는 자유여야 합니다.")
+    if not run_date:
+        raise ValueError("러닝 날짜를 입력해주세요.")
+    if distance_km < 0:
+        raise ValueError("거리는 0km 이상이어야 합니다.")
+
+    attendee_names = [name.strip() for name in attendee_names if name.strip()]
+    if participant_count != len(attendee_names):
+        raise ValueError("총 참석인원과 참석자 명단의 인원수가 일치해야 합니다.")
+
+    values = {
+        "run_type": run_type,
+        "title": f"{run_date:%Y-%m-%d} {run_type} 러닝",
+        "run_date": str(run_date),
+        "start_time": start_time.strftime("%H:%M:%S") if start_time else None,
+        "distance_km": round(float(distance_km), 2),
+        "participant_count": int(participant_count),
+        "attendee_names": attendee_names,
+    }
+    return update_regular_run_row(int(regular_run_id), values)
+
+
 def create_regular_run(
     *,
+    run_type: str,
     title: str,
     run_date: date,
     start_time: time | None,
@@ -409,6 +632,9 @@ def create_regular_run(
     raw_ocr_text: str,
     created_by: str,
 ) -> dict:
+    run_type = (run_type or "").strip()
+    if run_type not in {"정기", "자유"}:
+        raise ValueError("러닝 구분은 정기 또는 자유여야 합니다.")
     title = title.strip()
     if not title:
         raise ValueError("정기러닝명을 입력해주세요.")
@@ -422,7 +648,20 @@ def create_regular_run(
     if participant_count != len(attendee_names):
         raise ValueError("총 참석인원과 참석자 명단의 인원수가 일치해야 합니다.")
 
+    source_hash = hashlib.sha256(source_image_data).hexdigest()
+    if find_regular_run_by_source_hash(source_hash):
+        raise DuplicateRegularRunError("이미 등록한 캡처 이미지입니다.")
+
+    safe_suffix = Path(source_image_name).suffix.lower()
+    if safe_suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        safe_suffix = ".jpg"
+    content_type = mimetypes.types_map.get(safe_suffix, "image/jpeg")
+    image_path = (
+        f"{run_date:%Y/%m}/{source_hash[:16]}-{uuid.uuid4().hex}{safe_suffix}"
+    )
+
     row = {
+        "run_type": run_type,
         "title": title[:100],
         "run_date": str(run_date),
         "start_time": start_time.strftime("%H:%M:%S") if start_time else None,
@@ -434,8 +673,51 @@ def create_regular_run(
         "attendee_names": attendee_names,
         "memo": memo.strip()[:500],
         "source_image_name": Path(source_image_name).name[:255],
+        "source_image_bucket": REGULAR_RUN_IMAGE_BUCKET,
+        "source_image_path": image_path,
+        "source_image_mime_type": content_type,
+        "source_image_size": len(source_image_data),
         "raw_ocr_text": raw_ocr_text.strip()[:10_000],
-        "source_hash": hashlib.sha256(source_image_data).hexdigest(),
+        "source_hash": source_hash,
         "created_by": created_by.strip()[:80] or "admin",
     }
-    return insert_regular_run(row)
+    try:
+        upload_regular_run_image(
+            path=image_path,
+            data=source_image_data,
+            content_type=content_type,
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "payload too large" in message or "maximum allowed size" in message:
+            raise RegularRunStorageError(
+                "캡처 이미지가 너무 큽니다. 10MB 이하 이미지로 다시 시도해주세요."
+            ) from exc
+        if "bucket not found" in message or "not found" in message:
+            raise RegularRunStorageError(
+                "캡처 이미지 저장소가 없습니다. Supabase에서 007 SQL을 실행해주세요."
+            ) from exc
+        if "unauthorized" in message or "forbidden" in message or "403" in message:
+            raise RegularRunStorageError(
+                "캡처 이미지 저장 권한이 없습니다. Streamlit의 Supabase 관리자 Secret을 확인해주세요."
+            ) from exc
+        raise RegularRunStorageError(
+            "캡처 이미지를 Supabase Storage에 저장하지 못했습니다. 잠시 후 다시 시도해주세요."
+        ) from exc
+    try:
+        return insert_regular_run(row)
+    except Exception as exc:
+        try:
+            remove_regular_run_image(image_path)
+        except Exception:
+            pass
+        message = str(exc).lower()
+        if "23505" in message or "duplicate" in message:
+            raise DuplicateRegularRunError("이미 등록한 캡처 이미지입니다.") from exc
+        if "pgrst204" in message or "column" in message or "relation" in message:
+            raise RegularRunStorageError(
+                "러닝 데이터베이스 구조가 최신 버전이 아닙니다. Supabase에서 007 SQL을 실행해주세요."
+            ) from exc
+        raise RegularRunStorageError(
+            "러닝 정보를 데이터베이스에 저장하지 못했습니다. 잠시 후 다시 시도해주세요."
+        ) from exc

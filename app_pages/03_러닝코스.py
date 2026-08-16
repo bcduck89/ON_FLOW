@@ -369,6 +369,18 @@ if recent_course:
     else:
         registered_courses.insert(0, recent_course)
 
+recent_courses = st.session_state.get("recently_registered_courses", [])
+pending_recent_courses = []
+registered_hashes = {course.get("source_hash") for course in registered_courses}
+for course in reversed(recent_courses):
+    if course.get("source_hash") not in registered_hashes:
+        registered_courses.insert(0, course)
+        pending_recent_courses.append(course)
+if pending_recent_courses:
+    st.session_state["recently_registered_courses"] = pending_recent_courses
+else:
+    st.session_state.pop("recently_registered_courses", None)
+
 st.subheader("코스 지도")
 map_slot = st.empty()
 
@@ -388,7 +400,10 @@ if storage_notice:
 if message := st.session_state.pop("course_success_message", None):
     st.success(message)
 
-preview_course = None
+for message_type, message in st.session_state.pop("course_batch_messages", []):
+    getattr(st, message_type)(message)
+
+preview_courses = []
 if is_admin_user:
     st.subheader("GPX 코스 등록")
 
@@ -399,62 +414,86 @@ if is_admin_user:
             "SUPABASE_SECRET_KEY를 추가해야 합니다."
         )
 
-    uploaded_file = st.file_uploader(
+    uploaded_files = st.file_uploader(
         "GPX 파일",
         type=["gpx"],
+        accept_multiple_files=True,
         max_upload_size=5,
-        help="GPS 앱이나 러닝 워치에서 내보낸 GPX 파일을 선택하세요. 최대 5MB입니다.",
+        help="GPX 파일을 여러 개 선택할 수 있습니다. 파일당 최대 5MB입니다.",
         key="running_course_gpx",
     )
 
-    if uploaded_file is not None:
+    seen_hashes = set()
+    for uploaded_file in uploaded_files or []:
         try:
             preview_course = parse_uploaded_gpx(
                 uploaded_file.getvalue(), uploaded_file.name
             )
         except GPXParseError as error:
-            st.error(str(error))
+            st.error(f"{uploaded_file.name}: {error}")
+            continue
+        if preview_course["source_hash"] in seen_hashes:
+            st.warning(f"{uploaded_file.name}: 같은 내용의 GPX 파일이 중복 선택되었습니다.")
+            continue
+        seen_hashes.add(preview_course["source_hash"])
+        preview_courses.append(preview_course)
 
-    if preview_course:
-        with st.container(horizontal=True):
-            st.metric("거리", f"{preview_course['distance_km']:.2f} km")
-            st.metric("누적 상승", f"{preview_course['elevation_gain_m']:.0f} m")
-            st.metric("소요 시간", format_duration(preview_course["duration_seconds"]))
-            st.metric("GPS 포인트", f"{preview_course['point_count']:,}개")
+    if preview_courses:
+        st.caption(f"선택한 GPX {len(preview_courses)}개를 확인한 뒤 한 번에 등록할 수 있습니다.")
+        course_inputs = []
+        with st.form("course_batch_registration"):
+            for index, preview_course in enumerate(preview_courses, start=1):
+                form_key = preview_course["source_hash"][:12]
+                parsed_run_date = (
+                    date.fromisoformat(preview_course["run_date"])
+                    if preview_course.get("run_date")
+                    else date.today()
+                )
+                with st.container(border=True):
+                    st.markdown(f"#### {index}. {preview_course['name']}")
+                    with st.container(horizontal=True):
+                        st.metric("거리", f"{preview_course['distance_km']:.2f} km")
+                        st.metric("누적 상승", f"{preview_course['elevation_gain_m']:.0f} m")
+                        st.metric("소요 시간", format_duration(preview_course["duration_seconds"]))
+                        st.metric("GPS 포인트", f"{preview_course['point_count']:,}개")
 
-        parsed_run_date = (
-            date.fromisoformat(preview_course["run_date"])
-            if preview_course.get("run_date")
-            else date.today()
-        )
-        form_key = preview_course["source_hash"][:12]
-        with st.form(f"course_registration_{form_key}"):
-            course_name = st.text_input(
-                "코스 이름",
-                value=preview_course["name"],
-                max_chars=80,
-            )
-            course_run_date = st.date_input(
-                "뛴 날짜",
-                value=parsed_run_date,
-                max_value=date.today(),
-            )
-            course_location = st.text_input(
-                "지역",
-                max_chars=100,
-                placeholder="예: 부산 온천천",
-            )
-            course_description = st.text_area(
-                "코스 설명",
-                max_chars=500,
-                placeholder="출발 지점, 난이도, 추천 시간대 등을 기록해 주세요.",
-            )
-            course_tags = st.text_input(
-                "태그",
-                placeholder="예: 정규런, 야간런, 10K (쉼표로 구분)",
-            )
+                    course_inputs.append(
+                        {
+                            "preview": preview_course,
+                            "name": st.text_input(
+                                "코스 이름",
+                                value=preview_course["name"],
+                                max_chars=80,
+                                key=f"course_name_{form_key}",
+                            ),
+                            "run_date": st.date_input(
+                                "뛴 날짜",
+                                value=parsed_run_date,
+                                max_value=date.today(),
+                                key=f"course_date_{form_key}",
+                            ),
+                            "location": st.text_input(
+                                "지역",
+                                max_chars=100,
+                                placeholder="예: 부산 온천천",
+                                key=f"course_location_{form_key}",
+                            ),
+                            "description": st.text_area(
+                                "코스 설명",
+                                max_chars=500,
+                                placeholder="출발 지점, 난이도, 추천 시간대 등을 기록해 주세요.",
+                                key=f"course_description_{form_key}",
+                            ),
+                            "tags": st.text_input(
+                                "태그",
+                                placeholder="예: 정규런, 야간런, 10K (쉼표로 구분)",
+                                key=f"course_tags_{form_key}",
+                            ),
+                        }
+                    )
+
             submitted = st.form_submit_button(
-                "코스 등록",
+                f"코스 {len(preview_courses)}개 등록",
                 type="primary",
                 icon=":material/add_location_alt:",
                 disabled=not (storage_ready and admin_storage_ready),
@@ -462,30 +501,41 @@ if is_admin_user:
             )
 
         if submitted:
-            try:
-                saved_course = register_running_course(
-                    course_name,
-                    course_run_date,
-                    course_location,
-                    course_description,
-                    course_tags.split(","),
-                    st.session_state.get("user_id", "admin"),
-                    preview_course,
-                )
-            except ValueError as error:
-                st.error(str(error))
-            except Exception as error:
-                if "23505" in str(error):
-                    st.warning("이미 등록된 GPX 코스입니다.")
+            saved_courses = []
+            batch_messages = []
+            for course_input in course_inputs:
+                try:
+                    saved_course = register_running_course(
+                        course_input["name"],
+                        course_input["run_date"],
+                        course_input["location"],
+                        course_input["description"],
+                        course_input["tags"].split(","),
+                        st.session_state.get("user_id", "admin"),
+                        course_input["preview"],
+                    )
+                except ValueError as error:
+                    batch_messages.append(("error", f"{course_input['name']}: {error}"))
+                except Exception as error:
+                    if "23505" in str(error):
+                        batch_messages.append(
+                            ("warning", f"{course_input['name']}: 이미 등록된 GPX 코스입니다.")
+                        )
+                    else:
+                        batch_messages.append(
+                            ("error", f"{course_input['name']}: 등록에 실패했습니다.")
+                        )
                 else:
-                    st.error("코스 등록에 실패했습니다. 잠시 후 다시 시도해 주세요.")
-            else:
+                    saved_courses.append(saved_course)
+                    batch_messages.append(
+                        ("success", f"{course_input['name']}: 등록했습니다.")
+                    )
+
+            if saved_courses:
                 load_courses.clear()
-                st.session_state["recently_registered_course"] = saved_course
-                st.session_state["course_success_message"] = (
-                    f"'{course_name}' 코스를 등록했습니다."
-                )
-                st.rerun()
+                st.session_state["recently_registered_courses"] = saved_courses
+            st.session_state["course_batch_messages"] = batch_messages
+            st.rerun()
 
 display_courses = list(registered_courses)
 

@@ -15,12 +15,13 @@ from repositories.member_repository import (
     update_member,
     delete_member,
 )
+from repositories.regular_run_repository import list_regular_runs
 from services.transaction_engine import reprocess_transactions_for_member
 from utils.date_utils import calculate_age
 
 
 def get_raw_member_list() -> pd.DataFrame:
-    return list_members()
+    return add_member_attendance_counts(list_members())
 
 
 def _get_payment_status_masks(
@@ -181,6 +182,42 @@ def build_unpaid_fee_message(unpaid_members: pd.DataFrame) -> str:
     )
 
 
+def add_member_attendance_counts(
+    members: pd.DataFrame,
+    regular_runs: list[dict] | None = None,
+) -> pd.DataFrame:
+    counted = members.copy()
+    counted["정기 참석횟수"] = 0
+    counted["자유 참석횟수"] = 0
+    if counted.empty:
+        return counted
+
+    if regular_runs is None:
+        try:
+            regular_runs = list_regular_runs()
+        except Exception:
+            regular_runs = []
+
+    for member_index, member in counted.iterrows():
+        identities = {
+            str(value or "").replace(" ", "").casefold()
+            for value in (member.get("name", ""), member.get("nickname", ""))
+            if str(value or "").strip()
+        }
+        for run in regular_runs:
+            attendee_keys = {
+                str(name or "").replace(" ", "").casefold()
+                for name in (run.get("attendee_names") or [])
+            }
+            if identities.isdisjoint(attendee_keys):
+                continue
+            if run.get("run_type") == "정기":
+                counted.at[member_index, "정기 참석횟수"] += 1
+            elif run.get("run_type") == "자유":
+                counted.at[member_index, "자유 참석횟수"] += 1
+    return counted
+
+
 def get_member_list() -> pd.DataFrame:
     members = list_members()
 
@@ -188,6 +225,8 @@ def get_member_list() -> pd.DataFrame:
         return members
 
     members = annotate_removal_due_memo(members)
+
+    members = add_member_attendance_counts(members)
 
     members["나이 (만)"] = members["birth_date"].apply(calculate_age)
 
@@ -228,6 +267,8 @@ def get_member_list() -> pd.DataFrame:
         "회원구분",
         "이름",
         "닉네임",
+        "정기 참석횟수",
+        "자유 참석횟수",
         "생년월일",
         "나이 (만)",
         "성별",

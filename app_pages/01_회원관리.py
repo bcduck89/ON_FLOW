@@ -380,6 +380,10 @@ elif menu == "회원정보 수정 / 삭제":
     selected_row = raw_members[raw_members["label"] == selected_label].iloc[0]
     member_id = int(selected_row["member_id"])
 
+    with st.container(horizontal=True):
+        st.metric("정기 러닝 참석", f"{int(selected_row.get('정기 참석횟수', 0))}회")
+        st.metric("자유 러닝 참석", f"{int(selected_row.get('자유 참석횟수', 0))}회")
+
     st.divider()
 
     with st.form("edit_member_form"):
