@@ -22,6 +22,7 @@ from services.member_service import (
     import_members_from_csv,
 )
 from ui.auth_widgets import render_top_auth
+from utils.date_utils import date_input_bounds
 
 
 st.set_page_config(
@@ -70,6 +71,10 @@ def optional_date(value):
         return None
 
 
+today = date.today()
+earliest_date, latest_date = date_input_bounds(today)
+
+
 menu = st.radio(
     "회원관리 메뉴",
     ["회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
@@ -116,9 +121,6 @@ if menu == "회원 목록":
 elif menu == "회원 추가":
     st.subheader("회원 추가")
 
-    today = date.today()
-    earliest_birth_date = date(today.year - 70, 1, 1)
-
     with st.form("add_member_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
 
@@ -129,7 +131,7 @@ elif menu == "회원 추가":
             birth_date = st.date_input(
                 "생년월일",
                 value=None,
-                min_value=earliest_birth_date,
+                min_value=earliest_date,
                 max_value=today,
                 format="YYYY-MM-DD",
             )
@@ -152,6 +154,8 @@ elif menu == "회원 추가":
 
             joined_at = st.date_input(
                 "가입일",
+                min_value=earliest_date,
+                max_value=latest_date,
                 format="YYYY-MM-DD",
             )
 
@@ -287,6 +291,8 @@ elif menu == "회원정보 수정 / 삭제":
             edit_birth_date = st.date_input(
                 "생년월일",
                 value=optional_date(selected_row.get("birth_date", "")),
+                min_value=earliest_date,
+                max_value=today,
                 format="YYYY-MM-DD",
             )
 
@@ -333,6 +339,8 @@ elif menu == "회원정보 수정 / 삭제":
             edit_joined_at = st.date_input(
                 "가입일",
                 value=safe_date(selected_row.get("joined_at", "")),
+                min_value=earliest_date,
+                max_value=latest_date,
                 format="YYYY-MM-DD",
             )
 
