@@ -3,6 +3,10 @@ begin;
 alter table public.members
 drop constraint if exists members_status_check;
 
+update public.members
+set status = 'active'
+where status = 'dormant';
+
 alter table public.members
 add constraint members_status_check
 check (status in ('active', 'grace', 'fee_exempt', 'withdrawn'));

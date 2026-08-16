@@ -132,7 +132,7 @@ ON_FLOW는 동래구 중심의 지역 러닝 크루이며, 장기적으로 지�
 | membership_start | 회비 유효 시작일 |
 | membership_end | 회비 유효 종료일 |
 | grace_until | 회비 납부 유예 마감일 |
-| status | active, grace, dormant, withdrawn |
+| status | active, grace, fee_exempt, withdrawn |
 | memo | 비고 |
 
 ### 받지 않기로 한 정보
@@ -192,7 +192,7 @@ ON_FLOW는 동래구 중심의 지역 러닝 크루이며, 장기적으로 지�
 ```text
 유효종료일: 2026-07-31
 유예기간: 2026-08-01 ~ 2026-08-07
-2026-08-08부터 휴면 전환 대상
+2026-08-08부터 강퇴조치 대상
 ```
 
 회원 상태:
@@ -201,7 +201,7 @@ ON_FLOW는 동래구 중심의 지역 러닝 크루이며, 장기적으로 지�
 |---|---|
 | active | 회비 유효기간 안 |
 | grace | 유효기간 종료 후 7일 이내 |
-| dormant | 유효기간 종료 후 7일 초과 |
+| fee_exempt | 납부예외 사유가 있어 미납 및 강퇴조치 대상에서 제외 |
 | withdrawn | 탈퇴 |
 
 ---

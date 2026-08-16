@@ -89,15 +89,14 @@ with st.container():
         with st.container(horizontal=True):
             st.metric("총 등록 인원", f'{dashboard["total"]}명', border=True)
             st.metric("현 활동인원", f'{dashboard["active"]}명', border=True)
-            st.metric("휴면인원", f'{dashboard["dormant"]}명', border=True)
-            st.metric("영구탈퇴인원", f'{dashboard["withdrawn"]}명', border=True)
+            st.metric("탈퇴인원", f'{dashboard["withdrawn"]}명', border=True)
             st.metric("회비미납인원", f'{dashboard["unpaid"]}명', border=True)
             st.metric("납부예외인원", f'{dashboard["fee_exempt"]}명', border=True)
             st.metric("강퇴조치 대상", f'{dashboard["removal_due"]}명', border=True)
 
         st.caption(
             "회비 미납은 유효종료일 다음 날부터 납부유예마감일까지 집계합니다. "
-            "납부예외·휴면·탈퇴 회원은 제외됩니다."
+            "납부예외·탈퇴 회원은 제외됩니다."
         )
 
         show_unpaid = st.session_state.get("show_unpaid_members", False)
@@ -128,9 +127,22 @@ with st.container():
                     wrap_lines=True,
                 )
 
-        removal_due_members = dashboard["removal_due_members"]
-        if not removal_due_members.empty:
-            with st.expander(f'강퇴조치 대상 {dashboard["removal_due"]}명 확인'):
+        show_removal_due = st.session_state.get("show_removal_due_members", False)
+        removal_button_label = (
+            "강퇴조치 대상 접기" if show_removal_due else "강퇴조치 대상 보기"
+        )
+
+        if st.button(removal_button_label, icon=":material/person_remove:"):
+            st.session_state["show_removal_due_members"] = not show_removal_due
+            show_removal_due = not show_removal_due
+
+        if show_removal_due:
+            st.markdown("#### 강퇴조치 대상")
+            removal_due_members = dashboard["removal_due_members"]
+
+            if removal_due_members.empty:
+                st.success("현재 강퇴조치 대상 회원이 없습니다.")
+            else:
                 st.warning(
                     "납부유예마감일이 지난 회원입니다. 조치 전 납부 여부와 "
                     "납부예외 사유를 확인해주세요."

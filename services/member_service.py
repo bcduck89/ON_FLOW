@@ -23,36 +23,10 @@ def get_raw_member_list() -> pd.DataFrame:
     return list_members()
 
 
-def build_member_dashboard(
+def _get_payment_status_masks(
     members: pd.DataFrame,
-    reference_date: date | None = None,
-) -> dict:
-    """회원 현황과 회비 미납 회원 목록을 계산한다."""
-    reference_date = reference_date or date.today()
-    members = members.copy()
-
-    dashboard_columns = [
-        "회원번호",
-        "이름",
-        "닉네임",
-        "유효종료일",
-        "납부유예마감일",
-        "상태",
-    ]
-
-    if members.empty:
-        return {
-            "total": 0,
-            "active": 0,
-            "dormant": 0,
-            "withdrawn": 0,
-            "fee_exempt": 0,
-            "unpaid": 0,
-            "removal_due": 0,
-            "unpaid_members": pd.DataFrame(columns=dashboard_columns),
-            "removal_due_members": pd.DataFrame(columns=dashboard_columns),
-        }
-
+    reference_date: date,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
     statuses = members.get(
         "status",
         pd.Series("", index=members.index, dtype="object"),
@@ -85,6 +59,71 @@ def build_member_dashboard(
         & grace_dates.notna()
         & grace_dates.lt(reference_date)
     )
+    return statuses, unpaid_mask, removal_due_mask
+
+
+def annotate_removal_due_memo(
+    members: pd.DataFrame,
+    reference_date: date | None = None,
+) -> pd.DataFrame:
+    if members.empty:
+        return members.copy()
+
+    annotated = members.copy()
+    _, _, removal_due_mask = _get_payment_status_masks(
+        annotated,
+        reference_date or date.today(),
+    )
+    memo = annotated.get(
+        "memo",
+        pd.Series("", index=annotated.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+
+    def add_removal_label(value: str) -> str:
+        if "강퇴조치 대상" in value:
+            return value
+        return f"{value} · 강퇴조치 대상" if value else "강퇴조치 대상"
+
+    annotated["memo"] = memo
+    annotated.loc[removal_due_mask, "memo"] = memo.loc[removal_due_mask].apply(
+        add_removal_label
+    )
+    return annotated
+
+
+def build_member_dashboard(
+    members: pd.DataFrame,
+    reference_date: date | None = None,
+) -> dict:
+    """회원 현황과 회비 미납 회원 목록을 계산한다."""
+    reference_date = reference_date or date.today()
+    members = members.copy()
+
+    dashboard_columns = [
+        "회원번호",
+        "이름",
+        "닉네임",
+        "유효종료일",
+        "납부유예마감일",
+        "상태",
+    ]
+
+    if members.empty:
+        return {
+            "total": 0,
+            "active": 0,
+            "withdrawn": 0,
+            "fee_exempt": 0,
+            "unpaid": 0,
+            "removal_due": 0,
+            "unpaid_members": pd.DataFrame(columns=dashboard_columns),
+            "removal_due_members": pd.DataFrame(columns=dashboard_columns),
+        }
+
+    statuses, unpaid_mask, removal_due_mask = _get_payment_status_masks(
+        members,
+        reference_date,
+    )
 
     def build_status_view(mask: pd.Series) -> pd.DataFrame:
         view = members.loc[mask].copy()
@@ -108,7 +147,6 @@ def build_member_dashboard(
     return {
         "total": int(len(members)),
         "active": int(statuses.isin(["active", "grace", "fee_exempt"]).sum()),
-        "dormant": int(statuses.eq("dormant").sum()),
         "withdrawn": int(statuses.eq("withdrawn").sum()),
         "fee_exempt": int(statuses.eq("fee_exempt").sum()),
         "unpaid": int(unpaid_mask.sum()),
@@ -149,7 +187,7 @@ def get_member_list() -> pd.DataFrame:
     if members.empty:
         return members
 
-    members = members.copy()
+    members = annotate_removal_due_memo(members)
 
     members["나이 (만)"] = members["birth_date"].apply(calculate_age)
 

@@ -3,7 +3,11 @@ from datetime import date
 
 import pandas as pd
 
-from services.member_service import build_member_dashboard, build_unpaid_fee_message
+from services.member_service import (
+    annotate_removal_due_memo,
+    build_member_dashboard,
+    build_unpaid_fee_message,
+)
 
 
 class MemberDashboardTests(unittest.TestCase):
@@ -23,14 +27,6 @@ class MemberDashboardTests(unittest.TestCase):
                     "name": "이강퇴",
                     "nickname": "",
                     "status": "active",
-                    "membership_end": "2026-07-31",
-                    "grace_until": "2026-08-07",
-                },
-                {
-                    "member_code": "M003",
-                    "name": "박휴면",
-                    "nickname": "휴면이",
-                    "status": "dormant",
                     "membership_end": "2026-07-31",
                     "grace_until": "2026-08-07",
                 },
@@ -75,9 +71,8 @@ class MemberDashboardTests(unittest.TestCase):
             reference_date=date(2026, 8, 16),
         )
 
-        self.assertEqual(dashboard["total"], 7)
+        self.assertEqual(dashboard["total"], 6)
         self.assertEqual(dashboard["active"], 5)
-        self.assertEqual(dashboard["dormant"], 1)
         self.assertEqual(dashboard["withdrawn"], 1)
         self.assertEqual(dashboard["fee_exempt"], 1)
         self.assertEqual(dashboard["unpaid"], 2)
@@ -119,6 +114,24 @@ class MemberDashboardTests(unittest.TestCase):
         self.assertIn("- 최유예(유예중)", message)
         self.assertIn("- 윤미납", message)
         self.assertIn("이미 납부하셨다면", message)
+
+    def test_removal_due_label_is_appended_without_overwriting_memo(self):
+        members = self.members.copy()
+        members["memo"] = ""
+        members.loc[members["name"] == "이강퇴", "memo"] = "개별 확인 필요"
+
+        annotated = annotate_removal_due_memo(
+            members,
+            reference_date=date(2026, 8, 16),
+        )
+
+        removal_memo = annotated.loc[annotated["name"] == "이강퇴", "memo"].iloc[0]
+        active_memo = annotated.loc[annotated["name"] == "김활동", "memo"].iloc[0]
+        exempt_memo = annotated.loc[annotated["name"] == "한예외", "memo"].iloc[0]
+
+        self.assertEqual(removal_memo, "개별 확인 필요 · 강퇴조치 대상")
+        self.assertEqual(active_memo, "")
+        self.assertEqual(exempt_memo, "")
 
 
 if __name__ == "__main__":
