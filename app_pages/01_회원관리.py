@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
@@ -114,6 +116,9 @@ if menu == "회원 목록":
 elif menu == "회원 추가":
     st.subheader("회원 추가")
 
+    today = date.today()
+    earliest_birth_date = date(today.year - 70, 1, 1)
+
     with st.form("add_member_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
 
@@ -124,6 +129,8 @@ elif menu == "회원 추가":
             birth_date = st.date_input(
                 "생년월일",
                 value=None,
+                min_value=earliest_birth_date,
+                max_value=today,
                 format="YYYY-MM-DD",
             )
 
