@@ -10,7 +10,10 @@ def date_input_bounds(reference_date: date | None = None) -> tuple[date, date]:
     )
 
 
-def calculate_age(birth_date) -> int | None:
+def calculate_age(
+    birth_date,
+    reference_date: date | None = None,
+) -> int | None:
     if birth_date in ["", None]:
         return None
 
@@ -19,7 +22,7 @@ def calculate_age(birth_date) -> int | None:
     except Exception:
         return None
 
-    today = date.today()
+    today = reference_date or date.today()
 
     age = today.year - birth.year
 

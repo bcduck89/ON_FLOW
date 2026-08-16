@@ -29,7 +29,7 @@ def get_member_list() -> pd.DataFrame:
 
     members = members.copy()
 
-    members["나이"] = members["birth_date"].apply(calculate_age)
+    members["나이 (만)"] = members["birth_date"].apply(calculate_age)
 
     members["상태"] = (
         members["status"]
@@ -69,7 +69,7 @@ def get_member_list() -> pd.DataFrame:
         "이름",
         "닉네임",
         "생년월일",
-        "나이",
+        "나이 (만)",
         "성별",
         "시도",
         "시군구",
