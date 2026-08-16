@@ -1,6 +1,7 @@
 import streamlit as st
 
 from database.client import check_supabase_connection
+from repositories.fee_repository import FeePaymentSchemaError
 from services.auth_service import init_auth_state, is_admin
 from services.transaction_engine import import_kakaobank_excel
 from services.transaction_service import get_transaction_list
@@ -59,9 +60,14 @@ if menu == "거래내역 업로드":
                 st.success("거래내역 처리가 완료되었습니다.")
                 st.dataframe(result, width="stretch", hide_index=True)
 
-            except Exception as e:
+            except FeePaymentSchemaError as error:
                 st.error("거래내역 처리 중 오류가 발생했습니다.")
-                st.exception(e)
+                st.warning(str(error))
+            except Exception:
+                st.error(
+                    "거래내역 처리 중 오류가 발생했습니다. "
+                    "잠시 후 다시 시도해 주세요."
+                )
 
 elif menu == "거래내역 조회":
     st.subheader("거래내역 조회")
