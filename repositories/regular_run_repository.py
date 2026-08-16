@@ -3,7 +3,7 @@ from database.client import get_supabase_admin_client, get_supabase_client
 
 REGULAR_RUN_COLUMNS = (
     "regular_run_id,title,run_date,start_time,location,course_name,"
-    "distance_km,target_pace,participant_count,memo,source_image_name,"
+    "distance_km,target_pace,participant_count,attendee_names,memo,source_image_name,"
     "raw_ocr_text,source_hash,created_by,created_at"
 )
 
