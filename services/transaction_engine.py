@@ -121,6 +121,7 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
             result_rows.append(
                 {
                     "거래일시": tx.get("transaction_datetime", ""),
+                    "입출금": direction,
                     "입금자/내용": payer,
                     "금액": amount,
                     "처리결과": "확인필요",
@@ -136,6 +137,7 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
             result_rows.append(
                 {
                     "거래일시": tx.get("transaction_datetime", ""),
+                    "입출금": direction,
                     "입금자/내용": payer,
                     "금액": amount,
                     "처리결과": "미매칭",
@@ -149,6 +151,7 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
             result_rows.append(
                 {
                     "거래일시": tx.get("transaction_datetime", ""),
+                    "입출금": direction,
                     "입금자/내용": payer,
                     "금액": amount,
                     "처리결과": "확인필요",
@@ -170,6 +173,7 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
         result_rows.append(
             {
                 "거래일시": tx.get("transaction_datetime", ""),
+                "입출금": direction,
                 "입금자/내용": payer,
                 "금액": amount,
                 "회원": member.get("name", ""),
@@ -229,6 +233,7 @@ def reprocess_transactions_for_member(member: dict) -> pd.DataFrame:
         result_rows.append(
             {
                 "거래일시": tx.get("transaction_datetime", ""),
+                "입출금": direction,
                 "입금자": deposit_name,
                 "금액": amount,
                 "회원": member.get("name", ""),
