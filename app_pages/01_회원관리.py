@@ -13,6 +13,8 @@ from core.constants import (
 from database.client import check_supabase_connection
 from services.auth_service import init_auth_state, is_admin, is_developer
 from services.member_service import (
+    build_unpaid_fee_message,
+    get_member_dashboard,
     get_member_list,
     get_raw_member_list,
     add_member,
@@ -77,15 +79,64 @@ earliest_date, latest_date = date_input_bounds(today)
 
 menu = st.radio(
     "회원관리 메뉴",
-    ["회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
+    ["대시보드", "회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
     horizontal=True,
 )
 
 
 # =========================================================
+# 대시보드
+# =========================================================
+if menu == "대시보드":
+    st.subheader("회원 현황")
+
+    try:
+        dashboard = get_member_dashboard(reference_date=today)
+
+        with st.container(horizontal=True):
+            st.metric("총 등록 인원", f'{dashboard["total"]}명', border=True)
+            st.metric("현 활동인원", f'{dashboard["active"]}명', border=True)
+            st.metric("휴면인원", f'{dashboard["dormant"]}명', border=True)
+            st.metric("영구탈퇴인원", f'{dashboard["withdrawn"]}명', border=True)
+            st.metric("회비미납인원", f'{dashboard["unpaid"]}명', border=True)
+
+        show_unpaid = st.session_state.get("show_unpaid_members", False)
+        button_label = "회비 미납인원 접기" if show_unpaid else "회비 미납인원 보기"
+
+        if st.button(button_label, icon=":material/groups:"):
+            st.session_state["show_unpaid_members"] = not show_unpaid
+            show_unpaid = not show_unpaid
+
+        if show_unpaid:
+            st.markdown("#### 회비 미납인원")
+            unpaid_members = dashboard["unpaid_members"]
+
+            if unpaid_members.empty:
+                st.success("현재 회비 납부 확인이 필요한 회원이 없습니다.")
+            else:
+                st.dataframe(
+                    unpaid_members,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+                st.markdown("#### 카카오톡 안내문")
+                st.caption("아래 문구 오른쪽 위의 복사 버튼을 눌러 바로 붙여넣을 수 있습니다.")
+                st.code(
+                    build_unpaid_fee_message(unpaid_members),
+                    language=None,
+                    wrap_lines=True,
+                )
+
+    except Exception as e:
+        st.error("회원 현황을 불러오는 중 오류가 발생했습니다.")
+        st.exception(e)
+
+
+# =========================================================
 # 회원 목록
 # =========================================================
-if menu == "회원 목록":
+elif menu == "회원 목록":
     st.subheader("회원 목록")
 
     try:

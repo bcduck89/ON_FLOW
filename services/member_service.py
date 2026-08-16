@@ -1,3 +1,5 @@
+from datetime import date
+
 import pandas as pd
 
 from core.constants import (
@@ -19,6 +21,94 @@ from utils.date_utils import calculate_age
 
 def get_raw_member_list() -> pd.DataFrame:
     return list_members()
+
+
+def build_member_dashboard(
+    members: pd.DataFrame,
+    reference_date: date | None = None,
+) -> dict:
+    """회원 현황과 회비 미납 회원 목록을 계산한다."""
+    reference_date = reference_date or date.today()
+    members = members.copy()
+
+    if members.empty:
+        return {
+            "total": 0,
+            "active": 0,
+            "dormant": 0,
+            "withdrawn": 0,
+            "unpaid": 0,
+            "unpaid_members": pd.DataFrame(
+                columns=["회원번호", "이름", "닉네임", "납부유예마감일", "상태"]
+            ),
+        }
+
+    statuses = members.get(
+        "status",
+        pd.Series("", index=members.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+    grace_dates = pd.to_datetime(
+        members.get(
+            "grace_until",
+            pd.Series("", index=members.index, dtype="object"),
+        ),
+        errors="coerce",
+    ).dt.date
+
+    unpaid_mask = statuses.ne("withdrawn") & (
+        grace_dates.isna() | grace_dates.lt(reference_date)
+    )
+    unpaid_members = members.loc[unpaid_mask].copy()
+    unpaid_members["상태"] = statuses.loc[unpaid_mask].map(MEMBER_STATUS).fillna(
+        statuses.loc[unpaid_mask]
+    )
+    unpaid_members = unpaid_members.rename(
+        columns={
+            "member_code": "회원번호",
+            "name": "이름",
+            "nickname": "닉네임",
+            "grace_until": "납부유예마감일",
+        }
+    )
+
+    display_columns = ["회원번호", "이름", "닉네임", "납부유예마감일", "상태"]
+    for column in display_columns:
+        if column not in unpaid_members.columns:
+            unpaid_members[column] = ""
+
+    return {
+        "total": int(len(members)),
+        "active": int(statuses.eq("active").sum()),
+        "dormant": int(statuses.eq("dormant").sum()),
+        "withdrawn": int(statuses.eq("withdrawn").sum()),
+        "unpaid": int(unpaid_mask.sum()),
+        "unpaid_members": unpaid_members[display_columns].reset_index(drop=True),
+    }
+
+
+def get_member_dashboard(reference_date: date | None = None) -> dict:
+    return build_member_dashboard(list_members(), reference_date=reference_date)
+
+
+def build_unpaid_fee_message(unpaid_members: pd.DataFrame) -> str:
+    if unpaid_members.empty:
+        return "현재 회비 납부 확인이 필요한 회원이 없습니다. 감사합니다 😊"
+
+    names = []
+    for _, member in unpaid_members.iterrows():
+        name = str(member.get("이름", "")).strip()
+        nickname = str(member.get("닉네임", "")).strip()
+        display_name = f"{name}({nickname})" if nickname and nickname != name else name
+        if display_name:
+            names.append(display_name)
+
+    member_lines = "\n".join(f"- {name}" for name in names)
+    return (
+        "안녕하세요, ON:FLOW입니다 😊\n"
+        "회비 납부 확인이 필요한 분을 안내드립니다.\n"
+        f"{member_lines}\n"
+        "이미 납부하셨다면 편하게 말씀해주세요. 감사합니다!"
+    )
 
 
 def get_member_list() -> pd.DataFrame:
