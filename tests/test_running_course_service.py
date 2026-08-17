@@ -1,10 +1,14 @@
+import base64
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 from services.running_course_service import (
     GPXParseError,
     delete_running_course,
     parse_gpx,
+    register_running_course,
+    update_running_course,
 )
 
 
@@ -34,6 +38,9 @@ class ParseGpxTests(unittest.TestCase):
         self.assertGreater(course["distance_km"], 1)
         self.assertEqual(len(course["paths"]), 1)
         self.assertEqual(course["paths"][0][0], [129.079, 35.22])
+        self.assertEqual(base64.b64decode(course["gpx_raw_base64"]), SAMPLE_GPX)
+        self.assertEqual(course["gpx_filename"], "fallback.gpx")
+        self.assertEqual(course["gpx_size_bytes"], len(SAMPLE_GPX))
 
     def test_rejects_non_gpx_xml(self):
         with self.assertRaises(GPXParseError):
@@ -43,6 +50,52 @@ class ParseGpxTests(unittest.TestCase):
         unsafe = b'<!DOCTYPE gpx [<!ENTITY x "value">]><gpx>&x;</gpx>'
         with self.assertRaises(GPXParseError):
             parse_gpx(unsafe)
+
+
+class SaveRunningCourseTests(unittest.TestCase):
+    def test_registration_keeps_original_gpx_fields(self):
+        parsed = parse_gpx(SAMPLE_GPX, "oncheon.gpx")
+
+        with patch(
+            "services.running_course_service.insert_course",
+            side_effect=lambda row: row,
+        ) as insert:
+            saved = register_running_course(
+                "온천천",
+                date(2026, 8, 3),
+                "부산",
+                "야간 코스",
+                ["정규런"],
+                "admin",
+                parsed,
+            )
+
+        insert.assert_called_once()
+        self.assertEqual(base64.b64decode(saved["gpx_raw_base64"]), SAMPLE_GPX)
+        self.assertEqual(saved["gpx_filename"], "oncheon.gpx")
+        self.assertEqual(saved["gpx_size_bytes"], len(SAMPLE_GPX))
+
+    def test_updates_editable_course_metadata_only(self):
+        with patch(
+            "services.running_course_service.update_course",
+            side_effect=lambda course_id, row: {"activity_id": course_id, **row},
+        ) as update:
+            saved = update_running_course(
+                9,
+                "  수정 코스  ",
+                date(2026, 8, 10),
+                "  동래  ",
+                "  설명  ",
+                [" 정기 ", "", "야간"],
+            )
+
+        update.assert_called_once()
+        self.assertEqual(saved["name"], "수정 코스")
+        self.assertEqual(saved["run_date"], "2026-08-10")
+        self.assertEqual(saved["location_name"], "동래")
+        self.assertEqual(saved["tags"], ["정기", "야간"])
+        self.assertNotIn("paths", saved)
+        self.assertNotIn("gpx_raw_base64", saved)
 
 
 class DeleteRunningCourseTests(unittest.TestCase):

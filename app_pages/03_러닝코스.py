@@ -15,6 +15,7 @@ from services.running_course_service import (
     get_running_courses,
     parse_gpx,
     register_running_course,
+    update_running_course,
 )
 from services.auth_service import get_user_role
 from ui.auth_widgets import render_top_auth
@@ -23,12 +24,65 @@ from ui.auth_widgets import render_top_auth
 DEFAULT_LATITUDE = 35.205937778825124
 DEFAULT_LONGITUDE = 129.07877285285102
 OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/liberty"
+START_FLAG_BACKGROUND = {
+    "url": (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACx"
+        "jwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAFjSURBVHhe7ZuxbQJREEQ3dAkugdAhoUNCSnAJ"
+        "LsEZIaUQktIBZVCCQ1ubjlbm//0XeEbzpMlug3kHp38riDDmL94j4utJ8hpZsuDPk+Q1slhAURhz"
+        "K74W/zF7LDdCDmJhxnxHxCuWG0FFwAmLjaIg4BERL1hsFAUBn1hqBnYBdyw0C7uAIxaahVnAFct0"
+        "YBbwhmU6sArY5O4nrALaBx+EVUDmjGU6MAvILD8H2AVcsNAs7AIyByw1g4KApdOggoDMBxYbRUVA"
+        "+41QRUCm9SlQEdA+GKkI8EYIi42iIMAboRXYBXgjtAqzgOU3wYRVwCZ3P2EV0D74IKwCMt4IbfEc"
+        "YBfgjZA3QounQQUBmdYuIFER0H4jHBHA8huhHZYbIQexMCavkcUCisIYC8AhJSygKIyxABxSwgKK"
+        "whgLwCElLKAojLEAHFLCAorCGAvAISUsoCiMsQAcUsICisIYaQHyf57+BXuUrhIj5hiWAAAAAElF"
+        "TkSuQmCC"
+    ),
+    "width": 64,
+    "height": 64,
+    "anchorX": 13,
+    "anchorY": 61,
+    "mask": True,
+}
+START_FLAG_CHECKERS = {
+    "url": (
+        "data:image/png;base64,"
+        "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAAARnQU1BAACx"
+        "jwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAGBSURBVHhe7ZvBaQNREEN/aS4pJaQUl5LOEuYq"
+        "JBhnNMHZ1QNdPmtJX8awF58TQgg9HuecT6I6vwV12W+iOr8FGYBcvvQkPwum7k9F/dRQXT8bFYqX"
+        "L32RM6b6fAeVg+r62VDFMgA5Y+oWVjmorp8NVSwDkDOmbmGVg+r62VDFMgA5Y+oWVjmorp8NVaz7"
+        "HvBBzph++9w6FYKXf+WbUJ9HTfxWYYHTwkxTvzVU4LQwauq3hgqcFkY5/FZQgY7CG352VKCrsNv"
+        "Pjgp0Fd7ws6IC3+U9gMlKGeLlS7d/E8wA5IypW1jloLp+NlSxDEDOmLqFVQ6q62dDFcsA5IypW1"
+        "jloLp+NlSxd3kPWKdC8PKvfBPq86iJ3yoscFqYaeq3hgqcFkZN/dZQgdPCKIffCirQUXjDz44KdB"
+        "V2+9lRga7CG35WVGC38L8nA5DLZ4AMkAEyQAbAB69KBiCXzwAZIANkgAyAD16VDEAunwEyQAbIAB"
+        "kAH7wqtx9A/Z3tz/++Foz8ABtyknP5GpB3AAAAAElFTkSuQmCC"
+    ),
+    "width": 64,
+    "height": 64,
+    "anchorX": 13,
+    "anchorY": 60,
+    "mask": True,
+}
 COURSE_COLORS = [
     [37, 99, 235, 210],
-    [16, 185, 129, 210],
-    [249, 115, 22, 210],
-    [168, 85, 247, 210],
-    [225, 29, 72, 210],
+    [234, 88, 12, 210],
+    [22, 163, 74, 210],
+    [219, 39, 119, 210],
+    [8, 145, 178, 210],
+    [220, 38, 38, 210],
+    [124, 58, 237, 210],
+    [202, 138, 4, 210],
+    [13, 148, 136, 210],
+    [79, 70, 229, 210],
+    [77, 124, 15, 210],
+    [190, 24, 93, 210],
+    [3, 105, 161, 210],
+    [126, 34, 206, 210],
+    [194, 65, 12, 210],
+    [4, 120, 87, 210],
+    [190, 18, 60, 210],
+    [29, 78, 216, 210],
+    [146, 64, 14, 210],
+    [71, 85, 105, 210],
 ]
 @st.cache_data(ttl="2m", max_entries=5, show_spinner=False)
 def load_courses() -> list[dict]:
@@ -53,6 +107,14 @@ def format_duration(duration_seconds) -> str:
     hours, remainder = divmod(int(duration_seconds), 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+
+def format_distance_km(distance_km) -> str:
+    try:
+        value = float(distance_km or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return f"{value:.2f}".rstrip("0").rstrip(".") + "km"
 
 
 def map_view(courses: list[dict]) -> pdk.ViewState:
@@ -95,11 +157,12 @@ def render_course_legend(courses: list[dict]) -> None:
         red, green, blue = color[:3]
         alpha = (color[3] / 255) if len(color) > 3 else 1
         course_name = html.escape(str(course.get("name") or "러닝 코스"))
+        distance = html.escape(format_distance_km(course.get("distance_km")))
         legend_items.append(
             "<span style='display:inline-flex;align-items:center;gap:0.4rem;'>"
             f"<span style='width:1.5rem;height:0.3rem;border-radius:999px;"
             f"background:rgba({red},{green},{blue},{alpha:.2f});'></span>"
-            f"<span>{course_name}</span></span>"
+            f"<span>{course_name}({distance})</span></span>"
         )
 
     if not legend_items:
@@ -117,6 +180,7 @@ def render_course_legend(courses: list[dict]) -> None:
 def render_course_map(courses: list[dict], height: int = 680) -> None:
     path_rows = []
     endpoints = []
+    start_flags = []
     course_labels = []
 
     for course_index, course in enumerate(courses):
@@ -128,6 +192,16 @@ def render_course_map(courses: list[dict], height: int = 680) -> None:
                 {
                     "name": course.get("name", "러닝 코스"),
                     "position": label_path[len(label_path) // 2],
+                }
+            )
+            start_flags.append(
+                {
+                    "name": f"{course.get('name', '러닝 코스')} · 출발",
+                    "details": "코스 시작점",
+                    "position": valid_paths[0][0],
+                    "color": color,
+                    "background_icon": START_FLAG_BACKGROUND,
+                    "checker_icon": START_FLAG_CHECKERS,
                 }
             )
 
@@ -145,12 +219,6 @@ def render_course_map(courses: list[dict], height: int = 680) -> None:
             )
             endpoints.extend(
                 [
-                    {
-                        "name": f"{course.get('name', '러닝 코스')} · 출발",
-                        "details": "출발 지점",
-                        "position": path[0],
-                        "color": color,
-                    },
                     {
                         "name": f"{course.get('name', '러닝 코스')} · 도착",
                         "details": "도착 지점",
@@ -179,8 +247,37 @@ def render_course_map(courses: list[dict], height: int = 680) -> None:
                 data=path_rows,
                 get_path="path",
                 get_color="color",
-                get_width=5,
-                width_min_pixels=3,
+                get_width=8,
+                width_min_pixels=5,
+                width_max_pixels=12,
+                pickable=True,
+            )
+        )
+        layers.append(
+            pdk.Layer(
+                "IconLayer",
+                data=start_flags,
+                get_position="position",
+                get_icon="background_icon",
+                get_color=[255, 255, 255, 245],
+                get_size=56,
+                size_units=pdk.types.String("pixels"),
+                get_pixel_offset=[8, 0],
+                billboard=True,
+                pickable=False,
+            )
+        )
+        layers.append(
+            pdk.Layer(
+                "IconLayer",
+                data=start_flags,
+                get_position="position",
+                get_icon="checker_icon",
+                get_color="color",
+                get_size=54,
+                size_units=pdk.types.String("pixels"),
+                get_pixel_offset=[8, 0],
+                billboard=True,
                 pickable=True,
             )
         )
@@ -223,7 +320,7 @@ def render_course_map(courses: list[dict], height: int = 680) -> None:
             tooltip={"text": "{name}\n{details}"},
         ),
         height=height,
-        width=height,
+        width="stretch",
     )
     render_course_legend(courses)
     st.caption(
@@ -232,9 +329,9 @@ def render_course_map(courses: list[dict], height: int = 680) -> None:
     )
 
 
-def render_course_table(courses: list[dict], can_delete: bool) -> None:
+def render_course_table(courses: list[dict], can_manage: bool) -> None:
     columns = ["코스 이름", "거리 (km)", "지역"]
-    if can_delete:
+    if can_manage:
         columns.append("관리")
 
     course_rows = [
@@ -242,19 +339,34 @@ def render_course_table(courses: list[dict], can_delete: bool) -> None:
             "코스 이름": course.get("name", ""),
             "거리 (km)": course.get("distance_km", 0),
             "지역": course.get("location_name", ""),
-            **({"관리": ":material/delete:"} if can_delete else {}),
+            **(
+                {
+                    "관리": [
+                        ":material/edit: 수정",
+                        ":material/delete: 삭제",
+                    ]
+                }
+                if can_manage
+                else {}
+            ),
         }
         for course in courses
     ]
     course_frame = pd.DataFrame(course_rows, columns=columns)
 
-    def handle_delete_click() -> None:
-        click = st.session_state.get("course_delete_click")
+    def handle_management_click() -> None:
+        click = st.session_state.get("course_management_click")
         if not click:
             return
         row_index = int(click["row"])
         if 0 <= row_index < len(courses):
-            st.session_state["course_pending_delete"] = courses[row_index]
+            selected_course = courses[row_index]
+            if "수정" in str(click.get("label", "")):
+                st.session_state["course_pending_edit"] = selected_course
+                st.session_state.pop("course_pending_delete", None)
+            elif "삭제" in str(click.get("label", "")):
+                st.session_state["course_pending_delete"] = selected_course
+                st.session_state.pop("course_pending_edit", None)
 
     column_config = {
         "코스 이름": st.column_config.TextColumn(
@@ -265,24 +377,98 @@ def render_course_table(courses: list[dict], can_delete: bool) -> None:
         ),
         "지역": st.column_config.TextColumn("지역", width=160),
     }
-    if can_delete:
+    if can_manage:
         column_config["관리"] = st.column_config.ButtonColumn(
-            "",
-            width=52,
+            "관리",
+            width=90,
             type="tertiary",
             alignment="center",
-            on_click=handle_delete_click,
-            key="course_delete_click",
+            on_click=handle_management_click,
+            key="course_management_click",
         )
 
     st.dataframe(
         course_frame,
         column_config=column_config,
         hide_index=True,
-        width="content",
+        width="stretch",
     )
     if course_frame.empty:
         st.caption("아직 등록된 러닝 코스가 없습니다.")
+
+
+@st.dialog("코스 수정")
+def edit_running_course(course: dict) -> None:
+    course_name = str(course.get("name") or "러닝 코스")
+    try:
+        selected_date = date.fromisoformat(str(course.get("run_date"))[:10])
+    except (TypeError, ValueError):
+        selected_date = date.today()
+
+    tags = course.get("tags") or []
+    tag_text = tags if isinstance(tags, str) else ", ".join(str(tag) for tag in tags)
+
+    st.caption("GPX 경로·거리 원본은 유지하고 코스 정보를 수정합니다.")
+    with st.form(f"edit_course_{course.get('activity_id')}"):
+        name = st.text_input(
+            "코스 이름",
+            value=course_name,
+            max_chars=80,
+        )
+        run_date = st.date_input(
+            "뛴 날짜",
+            value=selected_date,
+            max_value=date.today(),
+            format="YYYY-MM-DD",
+        )
+        location_name = st.text_input(
+            "지역",
+            value=str(course.get("location_name") or ""),
+            max_chars=100,
+        )
+        description = st.text_area(
+            "코스 설명",
+            value=str(course.get("description") or ""),
+            max_chars=500,
+        )
+        tag_input = st.text_input(
+            "태그",
+            value=tag_text,
+            placeholder="예: 정규런, 야간런, 10K (쉼표로 구분)",
+        )
+        with st.container(horizontal=True, horizontal_alignment="right"):
+            cancelled = st.form_submit_button("취소")
+            submitted = st.form_submit_button(
+                "수정 저장",
+                type="primary",
+                icon=":material/save:",
+            )
+
+    if cancelled:
+        st.session_state.pop("course_pending_edit", None)
+        st.rerun()
+
+    if submitted:
+        try:
+            update_running_course(
+                activity_id=course.get("activity_id"),
+                name=name,
+                run_date=run_date,
+                location_name=location_name,
+                description=description,
+                tags=tag_input.split(","),
+            )
+        except ValueError as error:
+            st.error(str(error))
+        except Exception:
+            st.error("코스를 수정하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        else:
+            st.session_state.pop("course_pending_edit", None)
+            load_courses.clear()
+            st.session_state["course_success_message"] = (
+                f"'{name.strip()}' 코스를 수정했습니다."
+            )
+            st.rerun()
 
 
 @st.dialog("코스 삭제")
@@ -381,11 +567,41 @@ if pending_recent_courses:
 else:
     st.session_state.pop("recently_registered_courses", None)
 
-st.subheader("코스 지도")
-map_slot = st.empty()
+map_column, table_column = st.columns(
+    [3, 2],
+    gap="medium",
+    vertical_alignment="top",
+)
+with map_column:
+    st.subheader("코스 지도")
+    map_slot = st.empty()
 
-st.subheader("등록된 코스")
-render_course_table(registered_courses, can_delete=is_admin_user)
+with table_column:
+    with st.container(
+        horizontal=True,
+        horizontal_alignment="distribute",
+        vertical_alignment="center",
+    ):
+        st.subheader("등록된 코스")
+        if is_admin_user:
+            uploader_is_open = st.session_state.get("show_course_uploader", False)
+            if st.button(
+                "닫기" if uploader_is_open else "GPX 등록",
+                icon=":material/close:" if uploader_is_open else ":material/upload_file:",
+                type="secondary" if uploader_is_open else "primary",
+                key="toggle_course_uploader",
+                width="content",
+            ):
+                st.session_state["show_course_uploader"] = not uploader_is_open
+                st.rerun()
+    render_course_table(registered_courses, can_manage=is_admin_user)
+
+pending_edit = st.session_state.get("course_pending_edit")
+if pending_edit:
+    if is_admin_user:
+        edit_running_course(pending_edit)
+    else:
+        st.session_state.pop("course_pending_edit", None)
 
 pending_delete = st.session_state.get("course_pending_delete")
 if pending_delete:
@@ -404,7 +620,7 @@ for message_type, message in st.session_state.pop("course_batch_messages", []):
     getattr(st, message_type)(message)
 
 preview_courses = []
-if is_admin_user:
+if is_admin_user and st.session_state.get("show_course_uploader", False):
     st.subheader("GPX 코스 등록")
 
     admin_storage_ready = has_supabase_admin_credentials()
@@ -414,13 +630,14 @@ if is_admin_user:
             "SUPABASE_SECRET_KEY를 추가해야 합니다."
         )
 
+    uploader_version = st.session_state.setdefault("course_uploader_version", 0)
     uploaded_files = st.file_uploader(
         "GPX 파일",
         type=["gpx"],
         accept_multiple_files=True,
         max_upload_size=5,
         help="GPX 파일을 여러 개 선택할 수 있습니다. 파일당 최대 5MB입니다.",
-        key="running_course_gpx",
+        key=f"running_course_gpx_{uploader_version}",
     )
 
     seen_hashes = set()
@@ -521,6 +738,14 @@ if is_admin_user:
                         batch_messages.append(
                             ("warning", f"{course_input['name']}: 이미 등록된 GPX 코스입니다.")
                         )
+                    elif "gpx_raw_base64" in str(error) or "gpx_filename" in str(error):
+                        batch_messages.append(
+                            (
+                                "error",
+                                f"{course_input['name']}: Supabase에서 "
+                                "008_add_running_course_gpx_raw.sql을 먼저 실행해 주세요.",
+                            )
+                        )
                     else:
                         batch_messages.append(
                             ("error", f"{course_input['name']}: 등록에 실패했습니다.")
@@ -534,6 +759,9 @@ if is_admin_user:
             if saved_courses:
                 load_courses.clear()
                 st.session_state["recently_registered_courses"] = saved_courses
+            if len(saved_courses) == len(course_inputs):
+                st.session_state["course_uploader_version"] = uploader_version + 1
+                st.session_state["show_course_uploader"] = False
             st.session_state["course_batch_messages"] = batch_messages
             st.rerun()
 

@@ -11,6 +11,7 @@ create table if not exists public.regular_runs (
     course_name text not null default '' check (char_length(course_name) <= 150),
     distance_km numeric(8, 2) not null default 0 check (distance_km >= 0),
     target_pace text not null default '' check (char_length(target_pace) <= 50),
+    after_party text not null default '없음',
     participant_count integer not null default 0 check (participant_count >= 0),
     attendee_names text[] not null default '{}',
     memo text not null default '' check (char_length(memo) <= 500),
@@ -31,10 +32,22 @@ alter table public.regular_runs
     add column if not exists source_image_bucket text not null default 'regular-run-captures',
     add column if not exists source_image_path text,
     add column if not exists source_image_mime_type text,
-    add column if not exists source_image_size integer;
+    add column if not exists source_image_size integer,
+    add column if not exists after_party text not null default '없음';
 
 do $$
 begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'regular_runs_after_party_check'
+          and conrelid = 'public.regular_runs'::regclass
+    ) then
+        alter table public.regular_runs
+            add constraint regular_runs_after_party_check
+            check (after_party in ('카페', '식사', '없음'));
+    end if;
+
     if not exists (
         select 1
         from pg_constraint

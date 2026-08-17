@@ -14,13 +14,10 @@ from database.client import check_supabase_connection
 from services.auth_service import init_auth_state, is_admin, is_developer
 from services.member_service import (
     build_unpaid_fee_message,
-    get_member_dashboard,
-    get_member_list,
-    get_raw_member_list,
+    get_member_management_data,
     add_member,
     edit_member,
     remove_member,
-    export_members_csv,
     import_members_from_csv,
 )
 from ui.auth_widgets import render_top_auth
@@ -73,8 +70,64 @@ def optional_date(value):
         return None
 
 
+@st.dialog("회원 참석 러닝")
+def render_member_attendance_history(member: dict) -> None:
+    name = str(member.get("이름") or "회원")
+    nickname = str(member.get("닉네임") or "").strip()
+    display_name = f"{name} ({nickname})" if nickname and nickname != name else name
+    st.markdown(f"#### {display_name}")
+
+    history = pd.DataFrame(
+        member.get("참석 러닝 상세") or [],
+        columns=["번호", "구분", "날짜"],
+    )
+    if history.empty:
+        st.info("등록된 참석 러닝 기록이 없습니다.")
+    else:
+        st.dataframe(
+            history,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "번호": st.column_config.NumberColumn(format="%d"),
+                "날짜": st.column_config.DateColumn(format="YYYY-MM-DD"),
+            },
+        )
+
+    with st.container(horizontal=True, horizontal_alignment="right"):
+        if st.button("닫기", key="close_member_attendance_history"):
+            st.session_state.pop("member_attendance_history", None)
+            st.rerun()
+
+
+def toggle_member_dashboard_panel(panel: str) -> None:
+    current_panel = st.session_state.get("member_dashboard_panel")
+    st.session_state["member_dashboard_panel"] = (
+        None if current_panel == panel else panel
+    )
+
+
+def toggle_member_management_action(action: str) -> None:
+    current_action = st.session_state.get("member_management_action")
+    st.session_state["member_management_action"] = (
+        None if current_action == action else action
+    )
+
+
+@st.cache_data(ttl="30s", max_entries=3, show_spinner=False)
+def load_member_management_data(reference_date: date) -> dict:
+    return get_member_management_data(reference_date=reference_date)
+
+
 today = date.today()
 earliest_date, latest_date = date_input_bounds(today)
+
+try:
+    member_management_data = load_member_management_data(today)
+except Exception as error:
+    st.error("회원관리 데이터를 불러오는 중 오류가 발생했습니다.")
+    st.exception(error)
+    st.stop()
 
 
 # =========================================================
@@ -84,7 +137,7 @@ with st.container():
     st.subheader("회원 현황")
 
     try:
-        dashboard = get_member_dashboard(reference_date=today)
+        dashboard = member_management_data["dashboard"]
 
         st.html(
             """
@@ -100,41 +153,64 @@ with st.container():
         )
 
         metric_cards = [
-            ("member_total_card", "총 등록 인원", dashboard["total"]),
-            ("member_active_card", "현 활동인원", dashboard["active"]),
-            ("member_withdrawn_card", "탈퇴인원", dashboard["withdrawn"]),
-            ("member_unpaid_card", "회비미납인원", dashboard["unpaid"]),
-            ("member_exempt_card", "납부예외인원", dashboard["fee_exempt"]),
-            ("member_removal_card", "강퇴조치 대상", dashboard["removal_due"]),
+            (
+                "member_total_card",
+                "총 등록 인원",
+                dashboard["total"],
+                dashboard["total_gender"],
+            ),
+            (
+                "member_active_card",
+                "현 활동인원",
+                dashboard["active"],
+                dashboard["active_gender"],
+            ),
+            (
+                "member_withdrawn_card",
+                "탈퇴인원",
+                dashboard["withdrawn"],
+                dashboard["withdrawn_gender"],
+            ),
+            ("member_unpaid_card", "회비미납인원", dashboard["unpaid"], None),
+            ("member_exempt_card", "납부예외인원", dashboard["fee_exempt"], None),
+            ("member_removal_card", "강퇴조치 대상", dashboard["removal_due"], None),
         ]
 
         with st.container(horizontal=True):
-            for card_key, label, value in metric_cards:
+            for card_key, label, value, gender_breakdown in metric_cards:
                 with st.container(border=True, key=card_key):
                     st.metric(label, f"{value}명")
+                    if gender_breakdown is not None:
+                        st.caption(
+                            f"남성 {gender_breakdown['male']}명 · "
+                            f"여성 {gender_breakdown['female']}명"
+                        )
 
         st.caption(
             "회비 미납은 유효종료일 다음 날부터 납부유예마감일까지 집계합니다. "
             "납부예외·탈퇴 회원은 제외됩니다."
         )
 
-        show_unpaid = st.session_state.get("show_unpaid_members", False)
-        button_label = "회비 미납인원 접기" if show_unpaid else "회비 미납인원 보기"
-        show_removal_due = st.session_state.get("show_removal_due_members", False)
-        removal_button_label = (
-            "강퇴조치 대상 접기" if show_removal_due else "강퇴조치 대상 보기"
-        )
+        active_panel = st.session_state.get("member_dashboard_panel")
+        panel_buttons = [
+            ("unpaid", "회비 미납인원", ":material/groups:"),
+            ("removal", "강퇴조치 대상", ":material/person_remove:"),
+            ("management", "관리대상 인원", ":material/person_alert:"),
+        ]
 
-        with st.container(gap="small", width="content"):
-            if st.button(button_label, icon=":material/groups:"):
-                st.session_state["show_unpaid_members"] = not show_unpaid
-                show_unpaid = not show_unpaid
+        with st.container(horizontal=True, gap="small"):
+            for panel_key, panel_label, panel_icon in panel_buttons:
+                is_active = active_panel == panel_key
+                st.button(
+                    f"{panel_label} {'접기' if is_active else '보기'}",
+                    icon=":material/keyboard_arrow_up:" if is_active else panel_icon,
+                    type="primary" if is_active else "secondary",
+                    key=f"member_dashboard_{panel_key}",
+                    on_click=toggle_member_dashboard_panel,
+                    args=(panel_key,),
+                )
 
-            if st.button(removal_button_label, icon=":material/person_remove:"):
-                st.session_state["show_removal_due_members"] = not show_removal_due
-                show_removal_due = not show_removal_due
-
-        if show_unpaid:
+        if active_panel == "unpaid":
             st.markdown("#### 회비 미납인원")
             unpaid_members = dashboard["unpaid_members"]
 
@@ -155,7 +231,7 @@ with st.container():
                     wrap_lines=True,
                 )
 
-        if show_removal_due:
+        elif active_panel == "removal":
             st.markdown("#### 강퇴조치 대상")
             removal_due_members = dashboard["removal_due_members"]
 
@@ -172,6 +248,30 @@ with st.container():
                     hide_index=True,
                 )
 
+        elif active_panel == "management":
+            st.markdown("#### 관리대상 인원")
+            st.caption(
+                "활동 회원 중 가입한 달부터 현재 달까지의 월 평균 참석이 "
+                "1회 미만인 회원입니다."
+            )
+            management_target_members = dashboard["management_target_members"]
+
+            if management_target_members.empty:
+                st.success("현재 월 평균 참석이 1회 미만인 활동 회원이 없습니다.")
+            else:
+                st.dataframe(
+                    management_target_members,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "가입 경과개월": st.column_config.NumberColumn(format="%d개월"),
+                        "정기 참석": st.column_config.NumberColumn(format="%d회"),
+                        "자유 참석": st.column_config.NumberColumn(format="%d회"),
+                        "총 참석": st.column_config.NumberColumn(format="%d회"),
+                        "월 평균 참석": st.column_config.NumberColumn(format="%.2f회"),
+                    },
+                )
+
     except Exception as e:
         st.error("회원 현황을 불러오는 중 오류가 발생했습니다.")
         st.exception(e)
@@ -179,44 +279,86 @@ with st.container():
 
 st.divider()
 
-menu = st.segmented_control(
-    "회원관리 메뉴",
-    ["회원 목록", "회원 추가", "회원 일괄 업로드", "회원정보 수정 / 삭제"],
-    default="회원 목록",
-    required=True,
-    key="member_management_menu",
-    label_visibility="collapsed",
-    width="stretch",
-)
+csv_data = member_management_data["csv"]
+member_action = st.session_state.get("member_management_action")
+member_section_titles = {
+    "add": "회원 추가",
+    "import": "회원 일괄 업로드",
+    "edit": "회원정보 수정 / 삭제",
+}
+member_title_col, member_actions_col = st.columns([1, 4], vertical_alignment="center")
+with member_title_col:
+    st.subheader(member_section_titles.get(member_action, "회원 목록"))
+with member_actions_col:
+    with st.container(
+        horizontal=True,
+        horizontal_alignment="right",
+        gap="small",
+    ):
+        for action, label, icon in (
+            ("add", "회원 추가", ":material/person_add:"),
+            ("import", "일괄 업로드", ":material/upload_file:"),
+            ("edit", "회원정보 관리", ":material/manage_accounts:"),
+        ):
+            is_open = member_action == action
+            st.button(
+                "닫기" if is_open else label,
+                icon=":material/close:" if is_open else icon,
+                type="secondary" if is_open else "primary",
+                key=f"toggle_member_{action}",
+                on_click=toggle_member_management_action,
+                args=(action,),
+                width="content",
+            )
+        st.download_button(
+            label="CSV 다운로드",
+            data=csv_data,
+            file_name="onflow_members.csv",
+            mime="text/csv",
+            icon=":material/download:",
+            type="primary",
+            width="content",
+        )
 
 
 # =========================================================
 # 회원 목록
 # =========================================================
-if menu == "회원 목록":
-    st.subheader("회원 목록")
-
+if member_action is None:
     try:
-        members = get_member_list()
+        members = member_management_data["members"]
 
         if members.empty:
             st.info("아직 등록된 회원이 없습니다.")
         else:
+            def handle_member_attendance_click() -> None:
+                click = st.session_state.get("member_attendance_click") or {}
+                row_index = click.get("row")
+                if row_index is None or not 0 <= int(row_index) < len(members):
+                    return
+                st.session_state["member_attendance_history"] = members.iloc[
+                    int(row_index)
+                ].to_dict()
+
             st.dataframe(
                 members,
                 width="stretch",
                 hide_index=True,
+                column_config={
+                    "참석 러닝": st.column_config.ButtonColumn(
+                        "참석 러닝",
+                        width="small",
+                        type="tertiary",
+                        alignment="center",
+                        on_click=handle_member_attendance_click,
+                        key="member_attendance_click",
+                    ),
+                    "참석 러닝 상세": None,
+                },
             )
 
-            csv_data = export_members_csv()
-
-            st.download_button(
-                label="회원목록 CSV 다운로드",
-                data=csv_data,
-                file_name="onflow_members.csv",
-                mime="text/csv",
-                width="stretch",
-            )
+            if selected_member := st.session_state.get("member_attendance_history"):
+                render_member_attendance_history(selected_member)
 
     except Exception as e:
         st.error("회원 목록을 불러오는 중 오류가 발생했습니다.")
@@ -226,9 +368,7 @@ if menu == "회원 목록":
 # =========================================================
 # 회원 추가
 # =========================================================
-elif menu == "회원 추가":
-    st.subheader("회원 추가")
-
+elif member_action == "add":
     with st.form("add_member_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
 
@@ -285,6 +425,7 @@ elif menu == "회원 추가":
                     joined_at=joined_at,
                     memo=memo,
                 )
+                load_member_management_data.clear()
 
                 st.success(f"{name} 회원이 추가되었습니다.")
 
@@ -304,8 +445,7 @@ elif menu == "회원 추가":
 # =========================================================
 # 회원 일괄 업로드
 # =========================================================
-elif menu == "회원 일괄 업로드":
-    st.subheader("회원 CSV 일괄 업로드")
+elif member_action == "import":
 
     st.info(
         "CSV 컬럼 형식: 이름, 닉네임, 생년월일, 성별, 회원구분, 시도, 시군구, 입금자명, 가입일, 비고"
@@ -345,6 +485,7 @@ elif menu == "회원 일괄 업로드":
         if st.button("회원 일괄 업로드 실행", type="primary", width="stretch"):
             try:
                 result = import_members_from_csv(uploaded_file)
+                load_member_management_data.clear()
                 st.success("회원 일괄 업로드가 완료되었습니다.")
                 st.dataframe(result, width="stretch", hide_index=True)
 
@@ -356,10 +497,8 @@ elif menu == "회원 일괄 업로드":
 # =========================================================
 # 회원정보 수정 / 삭제
 # =========================================================
-elif menu == "회원정보 수정 / 삭제":
-    st.subheader("회원정보 수정 / 삭제")
-
-    raw_members = get_raw_member_list()
+elif member_action == "edit":
+    raw_members = member_management_data["raw_members"]
 
     if raw_members.empty:
         st.info("수정할 회원이 없습니다.")
@@ -495,6 +634,7 @@ elif menu == "회원정보 수정 / 삭제":
                     status=edit_status,
                     memo=edit_memo,
                 )
+                load_member_management_data.clear()
 
                 st.success("회원정보가 수정되었습니다.")
 
@@ -526,6 +666,7 @@ elif menu == "회원정보 수정 / 삭제":
         if st.button("회원 완전 삭제", type="primary", disabled=not delete_confirm):
             try:
                 remove_member(member_id)
+                load_member_management_data.clear()
                 st.success("회원이 삭제되었습니다.")
                 st.rerun()
 

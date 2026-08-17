@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import math
 from datetime import date, datetime, timezone
@@ -10,6 +11,7 @@ from repositories.running_course_repository import (
     delete_course,
     insert_course,
     list_courses,
+    update_course,
 )
 from services.auth_service import verify_admin_password
 
@@ -188,6 +190,9 @@ def parse_gpx(data: bytes, filename: str = "course.gpx") -> dict:
         "center_latitude": sum(point[1] for point in flat_points) / len(flat_points),
         "center_longitude": sum(point[0] for point in flat_points) / len(flat_points),
         "source_hash": hashlib.sha256(data).hexdigest(),
+        "gpx_raw_base64": base64.b64encode(data).decode("ascii"),
+        "gpx_filename": (Path(filename).name[:255] or "course.gpx"),
+        "gpx_size_bytes": len(data),
     }
 
 
@@ -222,9 +227,41 @@ def register_running_course(
         "point_count": course["point_count"],
         "paths": course["paths"],
         "source_hash": course["source_hash"],
+        "gpx_raw_base64": course["gpx_raw_base64"],
+        "gpx_filename": course["gpx_filename"],
+        "gpx_size_bytes": course["gpx_size_bytes"],
         "uploaded_by": uploaded_by.strip()[:80] or "admin",
     }
     return insert_course(row)
+
+
+def update_running_course(
+    activity_id: int,
+    name: str,
+    run_date: date,
+    location_name: str,
+    description: str,
+    tags: list[str],
+) -> dict:
+    try:
+        course_id = int(activity_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("수정할 코스 ID가 올바르지 않습니다.") from exc
+    if course_id <= 0:
+        raise ValueError("수정할 코스 ID가 올바르지 않습니다.")
+
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("코스 이름을 입력해 주세요.")
+
+    row = {
+        "name": clean_name[:80],
+        "run_date": run_date.isoformat(),
+        "location_name": location_name.strip()[:100],
+        "description": description.strip()[:500],
+        "tags": [tag.strip()[:30] for tag in tags if tag.strip()][:10],
+    }
+    return update_course(course_id, row)
 
 
 def delete_running_course(activity_id: int, admin_password: str) -> None:
