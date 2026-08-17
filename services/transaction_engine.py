@@ -1,3 +1,6 @@
+import hashlib
+from datetime import date, datetime, time
+
 import pandas as pd
 
 from parsers.kakaobank_parser import parse_kakaobank_excel
@@ -10,6 +13,88 @@ from repositories.transaction_repository import (
     update_transaction,
 )
 from services.fee_engine import get_months_from_amount, apply_fee_payment
+
+
+def create_manual_transaction(
+    *,
+    transaction_date: date,
+    transaction_time: time,
+    direction: str,
+    amount: int,
+    balance: int,
+    description: str,
+    memo: str = "",
+    bank_name: str = "카카오뱅크",
+) -> pd.DataFrame:
+    """수동 거래를 저장하고 입금이면 기존 회비 엔진까지 적용한다."""
+    direction = str(direction or "").strip()
+    if direction not in {"입금", "출금"}:
+        raise ValueError("입출금 구분은 입금 또는 출금이어야 합니다.")
+    if not transaction_date or not transaction_time:
+        raise ValueError("거래 날짜와 시간을 입력해주세요.")
+    if int(amount) <= 0:
+        raise ValueError("금액은 0원보다 커야 합니다.")
+    if int(balance) < 0:
+        raise ValueError("거래 후 잔액은 0원 이상이어야 합니다.")
+    description = str(description or "").strip()
+    if not description:
+        raise ValueError("입금자명 또는 사용 내용을 입력해주세요.")
+
+    transaction_datetime_value = datetime.combine(
+        transaction_date,
+        transaction_time,
+    )
+    transaction_datetime = transaction_datetime_value.strftime("%Y.%m.%d %H:%M:%S")
+    signed_amount = int(amount) if direction == "입금" else -int(amount)
+    hash_source = (
+        f"manual|{transaction_datetime}|{direction}|{signed_amount}|"
+        f"{int(balance)}|{description}|{str(memo or '').strip()}"
+    )
+    transaction_hash = hashlib.sha256(hash_source.encode("utf-8")).hexdigest()
+    if transaction_hash in get_existing_hashes():
+        raise ValueError("이미 등록된 수동 거래입니다.")
+
+    row = {
+        "transaction_hash": transaction_hash,
+        "transaction_datetime": transaction_datetime,
+        "transaction_date": transaction_date.isoformat(),
+        "transaction_time": transaction_time.strftime("%H:%M:%S"),
+        "direction": direction,
+        "amount": signed_amount,
+        "balance": int(balance),
+        "transaction_type": "수동입력",
+        "description": description,
+        "memo": str(memo or "").strip(),
+        "category": "회비입금" if direction == "입금" else "회비사용",
+        "confirm_status": "checked",
+        "bank_name": str(bank_name or "").strip() or "카카오뱅크",
+        "process_status": "uploaded",
+    }
+    insert_transactions([row])
+
+    transactions = list_transactions()
+    processing_target = transactions[
+        transactions["transaction_hash"].astype(str).eq(transaction_hash)
+    ].copy()
+    if processing_target.empty:
+        raise RuntimeError("수동 거래는 저장되었지만 처리 결과를 확인하지 못했습니다.")
+
+    fee_results = _apply_fee_engine(processing_target)
+    if fee_results:
+        return pd.DataFrame(fee_results)
+
+    return pd.DataFrame(
+        [
+            {
+                "거래일시": transaction_datetime,
+                "입출금": direction,
+                "입금자/내용": description,
+                "금액": signed_amount,
+                "처리결과": "저장완료",
+                "사유": "회비 사용 내역으로 저장했습니다.",
+            }
+        ]
+    )
 
 
 def import_kakaobank_excel(uploaded_file) -> pd.DataFrame:
@@ -86,6 +171,18 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
     if transactions.empty:
         return []
 
+    directions = transactions.get(
+        "direction",
+        pd.Series("", index=transactions.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+    outgoing_transactions = transactions.loc[~directions.eq("입금")]
+    for _, tx in outgoing_transactions.iterrows():
+        update_transaction(int(tx["transaction_id"]), {"process_status": "skipped"})
+
+    transactions = transactions.loc[directions.eq("입금")].copy()
+    if transactions.empty:
+        return []
+
     members = list_members()
 
     if members.empty:
@@ -109,10 +206,6 @@ def _apply_fee_engine(transactions: pd.DataFrame) -> list[dict]:
         direction = str(tx.get("direction", "")).strip()
         amount = int(tx.get("amount", 0))
         payer = str(tx.get("description", "")).strip()
-
-        if direction != "입금":
-            update_transaction(transaction_id, {"process_status": "skipped"})
-            continue
 
         months = get_months_from_amount(amount)
 

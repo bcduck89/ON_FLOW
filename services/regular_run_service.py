@@ -16,6 +16,7 @@ import streamlit as st
 
 from repositories.regular_run_repository import (
     REGULAR_RUN_IMAGE_BUCKET,
+    delete_regular_run as delete_regular_run_row,
     find_regular_run_by_source_hash,
     insert_regular_run,
     list_regular_runs,
@@ -24,6 +25,7 @@ from repositories.regular_run_repository import (
     upload_regular_run_image,
 )
 from repositories.member_repository import list_members
+from services.auth_service import verify_admin_password
 from utils.weekday_utils import get_korean_weekday
 
 
@@ -87,33 +89,104 @@ def _labeled_value(lines: list[str], labels: tuple[str, ...]) -> str:
     return ""
 
 
-def _extract_date(text: str, reference_date: date) -> date | None:
-    numeric = re.search(r"\b(20\d{2})[.\-/년]\s*(\d{1,2})[.\-/월]\s*(\d{1,2})일?\b", text)
-    if numeric:
-        try:
-            return date(*(int(value) for value in numeric.groups()))
-        except ValueError:
-            pass
+def _normalize_date_text(value: str) -> str:
+    return value.translate(
+        str.maketrans(
+            {
+                "／": "/",
+                "⁄": "/",
+                "∕": "/",
+                "．": ".",
+                "。": ".",
+                "－": "-",
+                "–": "-",
+                "—": "-",
+            }
+        )
+    )
 
-    korean = re.search(r"(?:(20\d{2})년\s*)?(\d{1,2})월\s*(\d{1,2})일", text)
-    if korean:
-        year = int(korean.group(1) or reference_date.year)
-        try:
-            return date(year, int(korean.group(2)), int(korean.group(3)))
-        except ValueError:
-            pass
 
-    short_date = re.search(r"(?<!\d)(\d{1,2})[./](\d{1,2})일?(?!\d)", text)
-    if short_date:
+def _date_with_inferred_year(month: int, day: int, reference_date: date) -> date | None:
+    candidates = []
+    for year in (reference_date.year - 1, reference_date.year, reference_date.year + 1):
         try:
-            return date(
-                reference_date.year,
-                int(short_date.group(1)),
-                int(short_date.group(2)),
+            candidates.append(date(year, month, day))
+        except ValueError:
+            continue
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda candidate: (
+            abs((candidate - reference_date).days),
+            candidate > reference_date,
+        ),
+    )
+
+
+def _date_candidates(value: str, reference_date: date) -> list[date]:
+    value = _normalize_date_text(value)
+    candidates: list[date] = []
+
+    full_date_patterns = (
+        r"(?<!\d)(20\d{2}|\d{2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,2})일?(?!\d)",
+        r"(?<!\d)(20\d{2}|\d{2})년\s*(\d{1,2})월\s*(\d{1,2})일",
+    )
+    for pattern in full_date_patterns:
+        for match in re.finditer(pattern, value):
+            year = int(match.group(1))
+            if year < 100:
+                year += 2000
+            try:
+                parsed = date(year, int(match.group(2)), int(match.group(3)))
+            except ValueError:
+                continue
+            if parsed not in candidates:
+                candidates.append(parsed)
+
+    short_date_patterns = (
+        r"(?<!\d)(\d{1,2})월\s*(\d{1,2})일",
+        r"(?<!\d)(\d{1,2})\s*[./-]\s*(\d{1,2})일?(?!\d)",
+    )
+    for pattern in short_date_patterns:
+        for match in re.finditer(pattern, value):
+            parsed = _date_with_inferred_year(
+                int(match.group(1)),
+                int(match.group(2)),
+                reference_date,
             )
-        except ValueError:
-            pass
-    return None
+            if parsed and parsed not in candidates:
+                candidates.append(parsed)
+    return candidates
+
+
+def _extract_date(
+    text: str,
+    reference_date: date,
+    filename: str = "",
+) -> date | None:
+    ranked_candidates: list[tuple[int, int, date]] = []
+    for line_index, raw_line in enumerate(text.splitlines()):
+        line = _clean_line(_normalize_date_text(raw_line))
+        if not line:
+            continue
+        context_score = 0
+        if re.search(r"(?:정모\s*)?(?:참석자|참가자)", line):
+            context_score += 100
+        if re.search(r"(?:날짜|일시|러닝일|모임일)", line):
+            context_score += 70
+        if re.search(r"오전|오후|\d{1,2}:\d{2}", line):
+            context_score += 20
+        if re.search(r"20\d{2}", line):
+            context_score += 5
+        for parsed in _date_candidates(line, reference_date):
+            ranked_candidates.append((context_score, -line_index, parsed))
+
+    if ranked_candidates:
+        return max(ranked_candidates, key=lambda item: (item[0], item[1]))[2]
+
+    filename_candidates = _date_candidates(Path(filename).stem, reference_date)
+    return filename_candidates[0] if filename_candidates else None
 
 
 def _extract_time(text: str) -> time | None:
@@ -265,7 +338,7 @@ def parse_regular_run_text(
         re.IGNORECASE,
     )
 
-    run_date = _extract_date(raw_text, reference_date)
+    run_date = _extract_date(raw_text, reference_date, filename)
     attendee_names = (
         _extract_attendees_from_layout(ocr_lines, participant_count)
         if ocr_lines
@@ -544,14 +617,18 @@ def get_regular_run_records() -> list[dict]:
     return list_regular_runs()
 
 
-def get_regular_run_list() -> pd.DataFrame:
-    rows = list_regular_runs()
+def get_regular_run_list(rows: list[dict] | None = None) -> pd.DataFrame:
+    if rows is None:
+        rows = list_regular_runs()
     columns = [
+        "번호",
         "구분",
         "날짜",
         "요일",
         "시간",
+        "코스 이름",
         "거리 (km)",
+        "뒷풀이",
         "총 참석인원",
         "참석자 명단",
     ]
@@ -559,7 +636,15 @@ def get_regular_run_list() -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
     view = pd.DataFrame(rows)
+    # 리스트는 최신 날짜부터 보여주되, 번호는 가장 오래된 기록을 1로 계산한다.
+    view["번호"] = range(len(view), 0, -1)
     view["weekday"] = view["run_date"].apply(get_korean_weekday)
+    if "after_party" not in view.columns:
+        view["after_party"] = "없음"
+    else:
+        view["after_party"] = view["after_party"].apply(
+            lambda value: value if value in {"카페", "식사", "없음"} else "없음"
+        )
     view["attendee_names"] = view["attendee_names"].apply(
         lambda names: ", ".join(names) if isinstance(names, list) else str(names or "")
     )
@@ -569,7 +654,9 @@ def get_regular_run_list() -> pd.DataFrame:
             "run_date": "날짜",
             "weekday": "요일",
             "start_time": "시간",
+            "course_name": "코스 이름",
             "distance_km": "거리 (km)",
+            "after_party": "뒷풀이",
             "participant_count": "총 참석인원",
             "attendee_names": "참석자 명단",
         }
@@ -586,7 +673,9 @@ def update_regular_run(
     run_type: str,
     run_date: date,
     start_time: time | None,
+    course_name: str,
     distance_km: float,
+    after_party: str,
     participant_count: int,
     attendee_names: list[str],
 ) -> dict:
@@ -597,6 +686,9 @@ def update_regular_run(
         raise ValueError("러닝 날짜를 입력해주세요.")
     if distance_km < 0:
         raise ValueError("거리는 0km 이상이어야 합니다.")
+    after_party = (after_party or "없음").strip()
+    if after_party not in {"카페", "식사", "없음"}:
+        raise ValueError("뒷풀이는 카페, 식사, 없음 중 하나여야 합니다.")
 
     attendee_names = [name.strip() for name in attendee_names if name.strip()]
     if participant_count != len(attendee_names):
@@ -607,11 +699,100 @@ def update_regular_run(
         "title": f"{run_date:%Y-%m-%d} {run_type} 러닝",
         "run_date": str(run_date),
         "start_time": start_time.strftime("%H:%M:%S") if start_time else None,
+        "course_name": (course_name or "").strip()[:150],
         "distance_km": round(float(distance_km), 2),
+        "after_party": after_party,
         "participant_count": int(participant_count),
         "attendee_names": attendee_names,
     }
     return update_regular_run_row(int(regular_run_id), values)
+
+
+def create_manual_regular_run(
+    *,
+    run_type: str,
+    run_date: date,
+    start_time: time | None,
+    course_name: str,
+    distance_km: float,
+    after_party: str,
+    attendee_names: list[str],
+    created_by: str,
+) -> dict:
+    """캡처 이미지 없이 관리자가 입력한 러닝 기록을 저장한다."""
+    run_type = (run_type or "").strip()
+    if run_type not in {"정기", "자유"}:
+        raise ValueError("러닝 구분은 정기 또는 자유여야 합니다.")
+    if not run_date:
+        raise ValueError("러닝 날짜를 입력해주세요.")
+    if distance_km < 0:
+        raise ValueError("거리는 0km 이상이어야 합니다.")
+    after_party = (after_party or "없음").strip()
+    if after_party not in {"카페", "식사", "없음"}:
+        raise ValueError("뒷풀이는 카페, 식사, 없음 중 하나여야 합니다.")
+
+    attendee_names = [name.strip() for name in attendee_names if name.strip()]
+    if not attendee_names:
+        raise ValueError("참석자 명단을 한 명 이상 입력해주세요.")
+
+    source_hash = hashlib.sha256(
+        f"manual:{uuid.uuid4().hex}".encode("utf-8")
+    ).hexdigest()
+    row = {
+        "run_type": run_type,
+        "title": f"{run_date:%Y-%m-%d} {run_type} 러닝",
+        "run_date": str(run_date),
+        "start_time": start_time.strftime("%H:%M:%S") if start_time else None,
+        "location": "",
+        "course_name": (course_name or "").strip()[:150],
+        "distance_km": round(float(distance_km), 2),
+        "target_pace": "",
+        "after_party": after_party,
+        "participant_count": len(attendee_names),
+        "attendee_names": attendee_names,
+        "memo": "수동 등록",
+        "source_image_name": "",
+        "source_image_bucket": REGULAR_RUN_IMAGE_BUCKET,
+        "source_image_path": None,
+        "source_image_mime_type": None,
+        "source_image_size": None,
+        "raw_ocr_text": "",
+        "source_hash": source_hash,
+        "created_by": created_by.strip()[:80] or "admin",
+    }
+    return insert_regular_run(row)
+
+
+def delete_regular_run(
+    regular_run_id: int,
+    admin_password: str,
+    source_image_path: str | None = None,
+) -> None:
+    if not verify_admin_password(admin_password):
+        raise PermissionError("관리자 비밀번호가 일치하지 않습니다.")
+
+    try:
+        run_id = int(regular_run_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("삭제할 러닝 기록 ID가 올바르지 않습니다.") from exc
+    if run_id <= 0:
+        raise ValueError("삭제할 러닝 기록 ID가 올바르지 않습니다.")
+
+    try:
+        delete_regular_run_row(run_id)
+    except Exception as exc:
+        raise RuntimeError(
+            "러닝 기록을 삭제하지 못했습니다. Supabase 관리자 Secret 키와 "
+            "regular_runs 테이블 권한을 확인해주세요."
+        ) from exc
+
+    if source_image_path:
+        try:
+            remove_regular_run_image(str(source_image_path))
+        except Exception:
+            # DB 삭제는 완료된 상태이므로 스토리지 정리 실패로
+            # 전체 삭제를 실패 처리하지 않는다.
+            pass
 
 
 def create_regular_run(
@@ -624,6 +805,7 @@ def create_regular_run(
     course_name: str,
     distance_km: float,
     target_pace: str,
+    after_party: str,
     participant_count: int,
     attendee_names: list[str],
     memo: str,
@@ -644,6 +826,9 @@ def create_regular_run(
         raise ValueError("거리는 0 이상이어야 합니다.")
     if participant_count < 0:
         raise ValueError("참여인원은 0명 이상이어야 합니다.")
+    after_party = (after_party or "없음").strip()
+    if after_party not in {"카페", "식사", "없음"}:
+        raise ValueError("뒷풀이는 카페, 식사, 없음 중 하나여야 합니다.")
     attendee_names = [name.strip() for name in attendee_names if name.strip()]
     if participant_count != len(attendee_names):
         raise ValueError("총 참석인원과 참석자 명단의 인원수가 일치해야 합니다.")
@@ -669,6 +854,7 @@ def create_regular_run(
         "course_name": course_name.strip()[:150],
         "distance_km": round(float(distance_km), 2),
         "target_pace": target_pace.strip()[:50],
+        "after_party": after_party,
         "participant_count": int(participant_count),
         "attendee_names": attendee_names,
         "memo": memo.strip()[:500],

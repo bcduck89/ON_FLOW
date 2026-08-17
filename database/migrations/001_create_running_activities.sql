@@ -19,6 +19,13 @@ create table if not exists public.running_activities (
     description text not null default '' check (char_length(description) <= 500),
     tags text[] not null default '{}',
     source_hash text not null unique check (char_length(source_hash) = 64),
+    gpx_raw_base64 text,
+    gpx_filename text check (
+        gpx_filename is null or char_length(gpx_filename) between 1 and 255
+    ),
+    gpx_size_bytes integer check (
+        gpx_size_bytes is null or gpx_size_bytes between 1 and 5242880
+    ),
     uploaded_by text not null check (char_length(uploaded_by) between 1 and 80),
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),

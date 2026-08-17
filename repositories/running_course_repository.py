@@ -34,6 +34,17 @@ def insert_course(row: dict) -> dict:
     return (response.data or [row])[0]
 
 
+def update_course(activity_id: int, row: dict) -> dict:
+    response = (
+        get_supabase_admin_client()
+        .table("running_activities")
+        .update(row)
+        .eq("activity_id", activity_id)
+        .execute()
+    )
+    return (response.data or [{**row, "activity_id": activity_id}])[0]
+
+
 def delete_course(activity_id: int) -> None:
     (
         get_supabase_admin_client()

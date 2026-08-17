@@ -108,23 +108,51 @@ def build_member_dashboard(
         "납부유예마감일",
         "상태",
     ]
+    management_columns = [
+        "회원번호",
+        "이름",
+        "닉네임",
+        "가입일",
+        "가입 경과개월",
+        "정기 참석",
+        "자유 참석",
+        "총 참석",
+        "월 평균 참석",
+    ]
 
     if members.empty:
         return {
             "total": 0,
             "active": 0,
             "withdrawn": 0,
+            "total_gender": {"male": 0, "female": 0},
+            "active_gender": {"male": 0, "female": 0},
+            "withdrawn_gender": {"male": 0, "female": 0},
             "fee_exempt": 0,
             "unpaid": 0,
             "removal_due": 0,
+            "management_target": 0,
             "unpaid_members": pd.DataFrame(columns=dashboard_columns),
             "removal_due_members": pd.DataFrame(columns=dashboard_columns),
+            "management_target_members": pd.DataFrame(columns=management_columns),
         }
 
     statuses, unpaid_mask, removal_due_mask = _get_payment_status_masks(
         members,
         reference_date,
     )
+    genders = members.get(
+        "gender",
+        pd.Series("", index=members.index, dtype="object"),
+    ).fillna("").astype(str).str.strip()
+    active_mask = statuses.isin(["active", "grace", "fee_exempt"])
+    withdrawn_mask = statuses.eq("withdrawn")
+
+    def gender_counts(mask: pd.Series) -> dict:
+        return {
+            "male": int((mask & genders.eq("남성")).sum()),
+            "female": int((mask & genders.eq("여성")).sum()),
+        }
 
     def build_status_view(mask: pd.Series) -> pd.DataFrame:
         view = members.loc[mask].copy()
@@ -145,20 +173,88 @@ def build_member_dashboard(
 
         return view[dashboard_columns].reset_index(drop=True)
 
+    def build_management_target_view() -> pd.DataFrame:
+        joined_dates = pd.to_datetime(
+            members.get(
+                "joined_at",
+                pd.Series("", index=members.index, dtype="object"),
+            ),
+            errors="coerce",
+        )
+        regular_counts = pd.to_numeric(
+            members.get(
+                "정기 참석횟수",
+                pd.Series(0, index=members.index, dtype="int64"),
+            ),
+            errors="coerce",
+        ).fillna(0)
+        free_counts = pd.to_numeric(
+            members.get(
+                "자유 참석횟수",
+                pd.Series(0, index=members.index, dtype="int64"),
+            ),
+            errors="coerce",
+        ).fillna(0)
+        elapsed_months = (
+            (reference_date.year - joined_dates.dt.year) * 12
+            + reference_date.month
+            - joined_dates.dt.month
+            + 1
+        ).clip(lower=1)
+        total_counts = regular_counts + free_counts
+        monthly_average = total_counts / elapsed_months
+        management_mask = (
+            active_mask
+            & joined_dates.notna()
+            & joined_dates.dt.date.le(reference_date)
+            & monthly_average.lt(1)
+        )
+
+        view = members.loc[management_mask].copy()
+        view["가입일"] = joined_dates.loc[management_mask].dt.date
+        view["가입 경과개월"] = elapsed_months.loc[management_mask].astype(int)
+        view["정기 참석"] = regular_counts.loc[management_mask].astype(int)
+        view["자유 참석"] = free_counts.loc[management_mask].astype(int)
+        view["총 참석"] = total_counts.loc[management_mask].astype(int)
+        view["월 평균 참석"] = monthly_average.loc[management_mask].round(2)
+        view = view.rename(
+            columns={
+                "member_code": "회원번호",
+                "name": "이름",
+                "nickname": "닉네임",
+            }
+        )
+
+        for column in management_columns:
+            if column not in view.columns:
+                view[column] = ""
+
+        return view[management_columns].sort_values(
+            ["월 평균 참석", "가입일", "이름"],
+            ascending=[True, True, True],
+        ).reset_index(drop=True)
+
+    management_target_members = build_management_target_view()
+
     return {
         "total": int(len(members)),
-        "active": int(statuses.isin(["active", "grace", "fee_exempt"]).sum()),
-        "withdrawn": int(statuses.eq("withdrawn").sum()),
+        "active": int(active_mask.sum()),
+        "withdrawn": int(withdrawn_mask.sum()),
+        "total_gender": gender_counts(pd.Series(True, index=members.index)),
+        "active_gender": gender_counts(active_mask),
+        "withdrawn_gender": gender_counts(withdrawn_mask),
         "fee_exempt": int(statuses.eq("fee_exempt").sum()),
         "unpaid": int(unpaid_mask.sum()),
         "removal_due": int(removal_due_mask.sum()),
+        "management_target": int(len(management_target_members)),
         "unpaid_members": build_status_view(unpaid_mask),
         "removal_due_members": build_status_view(removal_due_mask),
+        "management_target_members": management_target_members,
     }
 
 
 def get_member_dashboard(reference_date: date | None = None) -> dict:
-    return build_member_dashboard(list_members(), reference_date=reference_date)
+    return build_member_dashboard(get_raw_member_list(), reference_date=reference_date)
 
 
 def build_unpaid_fee_message(unpaid_members: pd.DataFrame) -> str:
@@ -185,10 +281,17 @@ def build_unpaid_fee_message(unpaid_members: pd.DataFrame) -> str:
 def add_member_attendance_counts(
     members: pd.DataFrame,
     regular_runs: list[dict] | None = None,
+    include_history: bool = False,
 ) -> pd.DataFrame:
     counted = members.copy()
     counted["정기 참석횟수"] = 0
     counted["자유 참석횟수"] = 0
+    if include_history:
+        counted["참석 러닝 상세"] = pd.Series(
+            [[] for _ in range(len(counted))],
+            index=counted.index,
+            dtype="object",
+        )
     if counted.empty:
         return counted
 
@@ -204,7 +307,7 @@ def add_member_attendance_counts(
             for value in (member.get("name", ""), member.get("nickname", ""))
             if str(value or "").strip()
         }
-        for run in regular_runs:
+        for run_index, run in enumerate(regular_runs):
             attendee_keys = {
                 str(name or "").replace(" ", "").casefold()
                 for name in (run.get("attendee_names") or [])
@@ -215,18 +318,27 @@ def add_member_attendance_counts(
                 counted.at[member_index, "정기 참석횟수"] += 1
             elif run.get("run_type") == "자유":
                 counted.at[member_index, "자유 참석횟수"] += 1
+            if include_history:
+                counted.at[member_index, "참석 러닝 상세"].append(
+                    {
+                        "번호": len(regular_runs) - run_index,
+                        "구분": str(run.get("run_type") or ""),
+                        "날짜": str(run.get("run_date") or "")[:10],
+                    }
+                )
     return counted
 
 
-def get_member_list() -> pd.DataFrame:
-    members = list_members()
-
-    if members.empty:
-        return members
-
-    members = annotate_removal_due_memo(members)
-
-    members = add_member_attendance_counts(members)
+def _format_member_list(
+    members: pd.DataFrame,
+    include_attendance_history: bool = False,
+) -> pd.DataFrame:
+    if include_attendance_history:
+        members["참석 러닝"] = members["참석 러닝 상세"].apply(
+            lambda runs: ":material/event_note: 보기"
+            if runs
+            else ":material/event_busy: 없음"
+        )
 
     members["나이 (만)"] = members["birth_date"].apply(calculate_age)
 
@@ -282,8 +394,59 @@ def get_member_list() -> pd.DataFrame:
         "상태",
         "비고",
     ]
+    if include_attendance_history:
+        display_cols.extend(["참석 러닝", "참석 러닝 상세"])
+
+    if members.empty:
+        return pd.DataFrame(columns=display_cols)
 
     return view[display_cols]
+
+
+def get_member_list(include_attendance_history: bool = False) -> pd.DataFrame:
+    members = annotate_removal_due_memo(list_members())
+    members = add_member_attendance_counts(
+        members,
+        include_history=include_attendance_history,
+    )
+    return _format_member_list(members, include_attendance_history)
+
+
+def get_member_management_data(reference_date: date | None = None) -> dict:
+    """회원관리 화면에 필요한 데이터를 DB 조회 한 번씩으로 구성한다."""
+    members = annotate_removal_due_memo(
+        list_members(),
+        reference_date=reference_date,
+    )
+    try:
+        regular_runs = list_regular_runs()
+    except Exception:
+        regular_runs = []
+    counted_members = add_member_attendance_counts(
+        members,
+        regular_runs=regular_runs,
+        include_history=True,
+    )
+    member_list = _format_member_list(
+        counted_members.copy(),
+        include_attendance_history=True,
+    )
+    csv_frame = _format_member_list(
+        counted_members.copy(),
+        include_attendance_history=False,
+    )
+    return {
+        "dashboard": build_member_dashboard(
+            counted_members,
+            reference_date=reference_date,
+        ),
+        "members": member_list,
+        "raw_members": counted_members,
+        "csv": csv_frame.to_csv(
+            index=False,
+            encoding="utf-8-sig",
+        ).encode("utf-8-sig"),
+    }
 
 
 def add_member(

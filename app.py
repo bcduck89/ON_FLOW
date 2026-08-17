@@ -1,6 +1,6 @@
 import streamlit as st
 
-from services.auth_service import init_auth_state, is_admin
+from services.auth_service import init_auth_state, is_admin, is_logged_in
 
 
 init_auth_state()
@@ -17,17 +17,17 @@ pages = [
         title="러닝 코스",
         icon=":material/route:",
     ),
-    st.Page(
-        "app_pages/04_정기러닝.py",
-        title="정기/자유러닝",
-        icon=":material/calendar_month:",
-    ),
-    st.Page(
-        "app_pages/00_로그인.py",
-        title="로그인",
-        icon=":material/login:",
-    ),
 ]
+
+if is_logged_in():
+    pages.insert(
+        2,
+        st.Page(
+            "app_pages/04_정기러닝.py",
+            title="정기/자유러닝",
+            icon=":material/calendar_month:",
+        ),
+    )
 
 if is_admin():
     pages.extend(

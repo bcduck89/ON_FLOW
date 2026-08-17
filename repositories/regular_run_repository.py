@@ -3,7 +3,7 @@ from database.client import get_supabase_admin_client, get_supabase_client
 
 REGULAR_RUN_COLUMNS = (
     "regular_run_id,run_type,title,run_date,start_time,location,course_name,"
-    "distance_km,target_pace,participant_count,attendee_names,memo,source_image_name,"
+    "distance_km,target_pace,after_party,participant_count,attendee_names,memo,source_image_name,"
     "source_image_bucket,source_image_path,source_image_mime_type,source_image_size,"
     "raw_ocr_text,source_hash,created_by,created_at"
 )
@@ -22,6 +22,17 @@ def list_regular_runs() -> list[dict]:
         .select(REGULAR_RUN_COLUMNS)
         .order("run_date", desc=True)
         .order("start_time", desc=True)
+        .execute()
+    )
+    return response.data or []
+
+
+def list_regular_run_distance_rows() -> list[dict]:
+    response = (
+        get_supabase_client()
+        .table("regular_runs")
+        .select("run_date,distance_km,participant_count")
+        .order("run_date")
         .execute()
     )
     return response.data or []
@@ -46,6 +57,16 @@ def update_regular_run(regular_run_id: int, values: dict) -> dict:
         .execute()
     )
     return (response.data or [values])[0]
+
+
+def delete_regular_run(regular_run_id: int) -> None:
+    (
+        get_supabase_admin_client()
+        .table("regular_runs")
+        .delete()
+        .eq("regular_run_id", int(regular_run_id))
+        .execute()
+    )
 
 
 def find_regular_run_by_source_hash(source_hash: str) -> dict | None:

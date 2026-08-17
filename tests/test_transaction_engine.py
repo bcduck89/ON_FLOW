@@ -1,12 +1,57 @@
 import unittest
+from datetime import date, time
 from unittest.mock import patch
 
 import pandas as pd
 
-from services.transaction_engine import _apply_fee_engine, import_kakaobank_excel
+from services.transaction_engine import (
+    _apply_fee_engine,
+    create_manual_transaction,
+    import_kakaobank_excel,
+)
 
 
 class ApplyFeeEngineTests(unittest.TestCase):
+    def test_manual_withdrawal_is_saved_as_negative_and_skipped_by_fee_engine(self):
+        saved_rows = []
+
+        def capture_rows(rows):
+            saved_rows.extend(rows)
+
+        def saved_transactions():
+            return pd.DataFrame([{"transaction_id": 9, **saved_rows[0]}])
+
+        with (
+            patch(
+                "services.transaction_engine.get_existing_hashes",
+                return_value=set(),
+            ),
+            patch(
+                "services.transaction_engine.insert_transactions",
+                side_effect=capture_rows,
+            ),
+            patch(
+                "services.transaction_engine.list_transactions",
+                side_effect=saved_transactions,
+            ),
+            patch("services.transaction_engine.update_transaction") as update,
+            patch("services.transaction_engine.list_members") as members,
+        ):
+            result = create_manual_transaction(
+                transaction_date=date(2026, 8, 17),
+                transaction_time=time(12, 30),
+                direction="출금",
+                amount=15000,
+                balance=300000,
+                description="소모임 구독료",
+            )
+
+        self.assertEqual(saved_rows[0]["amount"], -15000)
+        self.assertEqual(saved_rows[0]["category"], "회비사용")
+        self.assertEqual(result.iloc[0]["처리결과"], "저장완료")
+        update.assert_called_once_with(9, {"process_status": "skipped"})
+        members.assert_not_called()
+
     def test_includes_direction_in_fee_processing_result(self):
         transactions = pd.DataFrame(
             [
